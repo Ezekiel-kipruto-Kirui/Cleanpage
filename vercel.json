@@ -1,0 +1,40 @@
+{
+  "outputDirectory": "dist",
+  "routes": [
+    {
+      "src": "/api/token/?",
+      "dest": "/api/auth/login"
+    },
+    {
+      "src": "/api/token/refresh/?",
+      "dest": "/api/auth/refresh"
+    },
+    {
+      "src": "/api/me/?",
+      "dest": "/api/auth/me"
+    },
+    {
+      "src": "/api/users/me/?",
+      "dest": "/api/auth/me"
+    },
+    {
+      "src": "/api/Laundry/(.*)",
+      "dest": "/api/data?app=laundry&endpoint=$1"
+    },
+    {
+      "src": "/api/Hotel/(.*)",
+      "dest": "/api/data?app=hotel&endpoint=$1"
+    },
+    {
+      "src": "/api/Report/(.*)",
+      "dest": "/api/data?collection=reports&endpoint=$1"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/api/render"
+    }
+  ]
+}

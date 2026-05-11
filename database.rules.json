@@ -1,0 +1,70 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "LaundryApp_shoptype": {
+      ".read": true,
+      ".write": true
+    },
+    "LaundryApp_userprofile": {
+      ".read": true,
+      ".write": true
+    },
+    "LaundryApp_customer": {
+      ".read": true,
+      ".write": true
+    },
+    "LaundryApp_order": {
+      ".read": true,
+      ".write": true
+    },
+    "LaundryApp_orderitem": {
+      ".read": true,
+      ".write": true
+    },
+    "LaundryApp_expensefield": {
+      ".read": true,
+      ".write": true
+    },
+    "LaundryApp_expenserecord": {
+      ".read": true,
+      ".write": true
+    },
+    "LaundryApp_payment": {
+      ".read": true,
+      ".write": true
+    },
+    "HotelApp_foodcategory": {
+      ".read": true,
+      ".write": true
+    },
+    "HotelApp_fooditem": {
+      ".read": true,
+      ".write": true
+    },
+    "HotelApp_hotelorder": {
+      ".read": true,
+      ".write": true
+    },
+    "HotelApp_hotelorderitem": {
+      ".read": true,
+      ".write": true
+    },
+    "HotelApp_hotelexpensefield": {
+      ".read": true,
+      ".write": true
+    },
+    "HotelApp_hotelexpenserecord": {
+      ".read": true,
+      ".write": true
+    },
+    "reports": {
+      ".read": true,
+      ".write": true
+    },
+    "auth_users": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}
