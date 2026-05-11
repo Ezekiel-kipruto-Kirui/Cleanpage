@@ -55,20 +55,39 @@ async function firebaseOrLocal(pathName: string): Promise<unknown> {
   return localExport?.[pathName] || null;
 }
 
+async function getAuthUsersForLogin(): Promise<unknown> {
+  try {
+    const firebaseValue = await firebaseGet("auth_users");
+    if (firebaseValue !== null && firebaseValue !== undefined) return firebaseValue;
+  } catch (error) {
+    const localExport = await readLocalExport();
+    if (localExport?.auth_users) return localExport.auth_users;
+
+    const message = error instanceof Error ? error.message : "Unknown auth_users access error";
+    throw new Error(
+      `Server auth data is not accessible (${message}). Set FIREBASE_DATABASE_AUTH_TOKEN in Vercel so auth_users can be read server-side.`
+    );
+  }
+
+  const localExport = await readLocalExport();
+  if (localExport?.auth_users) return localExport.auth_users;
+
+  throw new Error(
+    "Server auth data is empty. Upload auth_users to Firebase or provide FIREBASE_DATABASE_AUTH_TOKEN for protected access."
+  );
+}
+
 export async function findAuthUserByEmail(email: string): Promise<FirebaseUserRecord | null> {
   const normalizedEmail = String(email || "").trim().toLowerCase();
   if (!normalizedEmail) return null;
 
-  const authUsers = await firebaseOrLocal("auth_users");
+  const authUsers = await getAuthUsersForLogin();
   const authUser = normalizeRecords(authUsers).find(
     (user) => String(user?.email || "").trim().toLowerCase() === normalizedEmail
   );
   if (authUser) return authUser;
 
-  const exportedUsers = await firebaseOrLocal("LaundryApp_userprofile");
-  return normalizeRecords(exportedUsers).find(
-    (user) => String(user?.email || "").trim().toLowerCase() === normalizedEmail
-  ) || null;
+  return null;
 }
 
 export async function findUserById(id: string): Promise<FirebaseUserRecord | null> {
