@@ -1,7 +1,7 @@
-import { sendJson, readJson, requireMethod } from "../_lib/http";
-import { issueAuthTokens, verifyToken } from "../_lib/jwt";
-import { findUserById, publicUser } from "../_lib/users";
-import type { RequestLike, ResponseLike } from "../_lib/types";
+import { sendJson, readJson, requireMethod } from "../_lib/http.js";
+import { issueAuthTokens, verifyToken } from "../_lib/jwt.js";
+import { findUserById, publicUser } from "../_lib/users.js";
+import type { RequestLike, ResponseLike } from "../_lib/types.js";
 
 interface RefreshBody {
   refresh?: string;

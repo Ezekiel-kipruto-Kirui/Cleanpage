@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import { requireEnv } from "./env";
-import type { JwtPayload, PublicUser, RequestLike } from "./types";
+import { requireEnv } from "./env.js";
+import type { JwtPayload, PublicUser, RequestLike } from "./types.js";
 
 const encoder = new TextEncoder();
 

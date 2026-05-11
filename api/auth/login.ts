@@ -1,8 +1,8 @@
-import { sendJson, readJson, requireMethod } from "../_lib/http";
-import { issueAuthTokens } from "../_lib/jwt";
-import { verifyPassword } from "../_lib/password";
-import { findAuthUserByEmail, publicUser } from "../_lib/users";
-import type { RequestLike, ResponseLike } from "../_lib/types";
+import { sendJson, readJson, requireMethod } from "../_lib/http.js";
+import { issueAuthTokens } from "../_lib/jwt.js";
+import { verifyPassword } from "../_lib/password.js";
+import { findAuthUserByEmail, publicUser } from "../_lib/users.js";
+import type { RequestLike, ResponseLike } from "../_lib/types.js";
 
 interface LoginBody {
   email?: string;

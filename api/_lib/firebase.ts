@@ -1,4 +1,4 @@
-import { optionalEnv } from "./env";
+import { optionalEnv } from "./env.js";
 
 export const FIREBASE_PROJECT_CONFIG = {
   apiKey: "AIzaSyBtv6inyG8x4EbbQVFdeZ8CM_nT5wI6siM",

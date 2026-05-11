@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withRequestPath } from "./_lib/render";
-import type { RequestLike, ResponseLike } from "./_lib/types";
+import { withRequestPath } from "./_lib/render.js";
+import type { RequestLike, ResponseLike } from "./_lib/types.js";
 
 const DIST_INDEX = path.join(process.cwd(), "dist", "index.html");
 const SOURCE_INDEX = path.join(process.cwd(), "index.html");

@@ -1,7 +1,7 @@
-import { firebaseGet } from "./firebase";
+import { firebaseGet } from "./firebase.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { FirebaseUserRecord, PublicUser } from "./types";
+import type { FirebaseUserRecord, PublicUser } from "./types.js";
 
 let localExportCache: Record<string, unknown> | null | undefined;
 

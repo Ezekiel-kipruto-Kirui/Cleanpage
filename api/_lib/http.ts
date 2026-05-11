@@ -1,4 +1,4 @@
-import type { RequestLike, ResponseLike } from "./types";
+import type { RequestLike, ResponseLike } from "./types.js";
 
 export function sendJson(res: ResponseLike, statusCode: number, body: unknown): void {
   res.statusCode = statusCode;

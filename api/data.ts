@@ -1,5 +1,5 @@
-import { sendJson, readJson } from "./_lib/http";
-import { bearerToken, verifyToken } from "./_lib/jwt";
+import { sendJson, readJson } from "./_lib/http.js";
+import { bearerToken, verifyToken } from "./_lib/jwt.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -10,8 +10,8 @@ import {
   listFromFirebaseObject,
   normalizeCollection,
   recordIdFromEndpoint,
-} from "./_lib/firebase";
-import type { RequestLike, ResponseLike } from "./_lib/types";
+} from "./_lib/firebase.js";
+import type { RequestLike, ResponseLike } from "./_lib/types.js";
 
 type FirebaseRecord = Record<string, unknown> & { id?: number | string };
 type FirebaseRecords = Record<string, FirebaseRecord>;

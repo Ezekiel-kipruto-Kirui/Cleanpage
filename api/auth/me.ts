@@ -1,7 +1,7 @@
-import { sendJson, requireMethod } from "../_lib/http";
-import { bearerToken, verifyToken } from "../_lib/jwt";
-import { findUserById, publicUser } from "../_lib/users";
-import type { RequestLike, ResponseLike } from "../_lib/types";
+import { sendJson, requireMethod } from "../_lib/http.js";
+import { bearerToken, verifyToken } from "../_lib/jwt.js";
+import { findUserById, publicUser } from "../_lib/users.js";
+import type { RequestLike, ResponseLike } from "../_lib/types.js";
 
 export default async function handler(req: RequestLike, res: ResponseLike): Promise<void> {
   if (!requireMethod(req, res, ["GET"])) return;
