@@ -22,6 +22,9 @@ Recommended Vercel environment variables:
 
 - `FIREBASE_DATABASE_AUTH_TOKEN` - token/secret used by the Vercel function to read and write protected database paths.
 - `FIREBASE_DATABASE_URL` - optional override for the built-in database URL.
+- `ROAMTECH_API_KEY` - SMS API key for order/customer messaging.
+- `ROAMTECH_PARTNER_ID` - SMS partner ID.
+- `SHORTCODE` - SMS sender shortcode used in the provider payload.
 
 Auth expects users in Firebase under `auth_users`. The export script at
 `../../scripts/export_firebase_data.py` creates that collection from Django users
@@ -30,6 +33,18 @@ and stores existing Django `pbkdf2_sha256` password hashes as `password_hash`.
 Protect `auth_users` in Firebase security rules so browser clients cannot read
 password hashes directly. If you keep `auth_users` protected, the Vercel
 functions need `FIREBASE_DATABASE_AUTH_TOKEN` or equivalent server-side access.
+
+Optional SMS environment variables:
+
+- `SMS_BASE_URL` - defaults to `https://api.v2.emalify.com`
+- `SMS_NOTIFICATIONS_ENABLED` - set to `false` to disable outbound SMS without removing credentials
+
+SMS behavior now handled by the serverless backend:
+
+- `POST /api/Laundry/send-sms/` sends single or bulk SMS
+- creating a laundry order sends a confirmation SMS to the customer
+- updating an order to `Completed` or `Delivered_picked` sends a status SMS
+- updating an order payment to `completed` sends a payment confirmation SMS
 
 Deployment note:
 

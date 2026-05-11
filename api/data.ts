@@ -11,6 +11,7 @@ import {
   normalizeCollection,
   recordIdFromEndpoint,
 } from "./_lib/firebase.js";
+import { sendSms } from "./_lib/sms.js";
 import type { RequestLike, ResponseLike } from "./_lib/types.js";
 
 type FirebaseRecord = Record<string, unknown> & { id?: number | string };
@@ -169,6 +170,51 @@ async function findCustomerByPhone(phone: string): Promise<FirebaseRecord | null
   const customers = listRecords(await getCollectionRecords("LaundryApp_customer"));
   const normalized = String(phone || "").replace(/\s+/g, "");
   return customers.find((customer) => String(customer.phone || "").replace(/\s+/g, "") === normalized) || null;
+}
+
+async function getLaundryCustomerById(customerId: unknown): Promise<FirebaseRecord | null> {
+  if (customerId && typeof customerId === "object" && "id" in customerId) {
+    customerId = (customerId as { id?: unknown }).id;
+  }
+  if (customerId === undefined || customerId === null || customerId === "") return null;
+  const customers = listRecords(await getCollectionRecords("LaundryApp_customer"));
+  return customers.find((customer) => String(customer.id || "") === String(customerId)) || null;
+}
+
+function orderNotificationMessage(
+  customerName: string,
+  orderCode: string,
+  trigger: "created" | "completed" | "delivered" | "paid",
+): string | null {
+  if (trigger === "created") {
+    return `Hello ${customerName}! Your order ${orderCode} has been received and is now being processed.`;
+  }
+  if (trigger === "completed") {
+    return `Hi ${customerName}, your order ${orderCode} is now complete. Thank you for choosing our laundry service.`;
+  }
+  if (trigger === "delivered") {
+    return `Hello ${customerName}, your order ${orderCode} has been delivered successfully. We appreciate your trust in our services.`;
+  }
+  if (trigger === "paid") {
+    return `Hello ${customerName}, payment for order ${orderCode} has been received successfully. Thank you.`;
+  }
+  return null;
+}
+
+async function notifyLaundryOrder(record: FirebaseRecord, trigger: "created" | "completed" | "delivered" | "paid"): Promise<void> {
+  const customerId = fieldValue(record, ["customer_id"]) ?? fieldValue(record, ["customer"]);
+  const customer = await getLaundryCustomerById(customerId);
+  const phone = String(customer?.phone || "").trim();
+  const customerName = String(customer?.name || "Customer").trim() || "Customer";
+  const orderCode = String(record.uniquecode || uniqueOrderCode(record.id || ""));
+  const message = orderNotificationMessage(customerName, orderCode, trigger);
+
+  if (!phone || !message) return;
+
+  const result = await sendSms(phone, message);
+  if (!result.success) {
+    console.warn(`SMS notification failed for order ${orderCode}: ${result.details}`);
+  }
 }
 
 async function enrichHotelOrderItems(records: Array<FirebaseRecord>): Promise<Array<FirebaseRecord>> {
@@ -455,6 +501,16 @@ export default async function handler(req: RequestLike, res: ResponseLike): Prom
 
     if (req.method === "POST") {
       const body = await readJson<Record<string, unknown>>(req);
+      if (String(app || "").toLowerCase() === "laundry" && segments[0] === "send-sms") {
+        const result = await sendSms(body.to_number, body.message);
+        if (!result.success) {
+          sendJson(res, result.error === "SMS not configured" ? 503 : 400, result);
+          return;
+        }
+        sendJson(res, 200, result);
+        return;
+      }
+
       const records = await firebaseGet(resolvedCollection).catch(() => ({} as Record<string, { id?: number | string }>));
       const nextRecordId = (body.id || nextId(records)) as string | number;
       const userId = Number(tokenPayload.sub) || tokenPayload.sub;
@@ -496,6 +552,8 @@ export default async function handler(req: RequestLike, res: ResponseLike): Prom
             return firebasePut(`LaundryApp_orderitem/${itemId}`, orderItem);
           }));
         }
+
+        await notifyLaundryOrder(record, "created");
       }
 
       sendJson(res, 201, record);
@@ -509,10 +567,36 @@ export default async function handler(req: RequestLike, res: ResponseLike): Prom
       }
 
       const body = await readJson<Record<string, unknown>>(req);
+      const existingRecord = (await firebaseGet(`${resolvedCollection}/${recordId}`).catch(() => null)) as FirebaseRecord | null;
       const record = { ...body, id: Number(recordId) || recordId };
+      const isLaundryOrder = resolvedCollection === "LaundryApp_order";
+      const payload = isLaundryOrder
+        ? { ...record, updated_at: new Date().toISOString() }
+        : record;
       const saved = req.method === "PUT"
-        ? await firebasePut(`${resolvedCollection}/${recordId}`, record)
-        : await firebasePatch(`${resolvedCollection}/${recordId}`, record);
+        ? await firebasePut(`${resolvedCollection}/${recordId}`, payload)
+        : await firebasePatch(`${resolvedCollection}/${recordId}`, payload);
+      const mergedRecord = { ...(existingRecord || {}), ...(saved as FirebaseRecord) } as FirebaseRecord;
+
+      if (isLaundryOrder && existingRecord) {
+        const previousOrderStatus = String(existingRecord.order_status || "");
+        const nextOrderStatus = String(mergedRecord.order_status || previousOrderStatus);
+        const previousPaymentStatus = String(existingRecord.payment_status || "");
+        const nextPaymentStatus = String(mergedRecord.payment_status || previousPaymentStatus);
+
+        if (previousOrderStatus !== "Completed" && nextOrderStatus === "Completed") {
+          await notifyLaundryOrder(mergedRecord, "completed");
+        }
+
+        if (previousOrderStatus !== "Delivered_picked" && nextOrderStatus === "Delivered_picked") {
+          await notifyLaundryOrder(mergedRecord, "delivered");
+        }
+
+        if (previousPaymentStatus !== "completed" && nextPaymentStatus === "completed") {
+          await notifyLaundryOrder(mergedRecord, "paid");
+        }
+      }
+
       sendJson(res, 200, saved);
       return;
     }
