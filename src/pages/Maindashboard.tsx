@@ -9,11 +9,7 @@ import {
     DollarSign,
     TrendingUp,
     Bath,
-    User,
-    CreditCard,
-    CheckCircle,
-    AlertCircle,
-    Box
+    User
 } from "lucide-react";
 import { getAccessToken } from "@/services/api";
 import { API_BASE_URL } from "@/services/url";
@@ -31,12 +27,6 @@ interface ProcessedData {
     laundryRevenue: number;
     laundryExpenses: number;
     laundryProfit: number;
-    completedOrders: number;
-    totalOrders: number;
-    paymentMethods: Array<{ name: string; count: number; total: number }>;
-    topServices: Array<{ name: string; count: number }>;
-    commonItems: Array<{ name: string; count: number }>;
-    topCustomers: Array<{ name: string; phone: string; spent: number; count: number }>;
     currentMonthName: string;
 }
 
@@ -91,12 +81,6 @@ export default function Dashboard() {
         laundryRevenue: 0,
         laundryExpenses: 0,
         laundryProfit: 0,
-        completedOrders: 0,
-        totalOrders: 0,
-        paymentMethods: [],
-        topServices: [],
-        commonItems: [],
-        topCustomers: [],
         currentMonthName: getCurrentMonthName()
     });
 
@@ -131,10 +115,6 @@ export default function Dashboard() {
                 const hotelStats = backendData.hotel_stats || {};
                 const orderStats = backendData.order_stats || {};
                 const expenseStats = backendData.expense_stats || {};
-                const paymentMethods = backendData.payment_methods || [];
-                const topServices = backendData.top_services || [];
-                const commonItems = backendData.common_items || [];
-                const commonCustomers = backendData.common_customers || [];
 
                 // Calculate Laundry Profit (Revenue - Expenses)
                 const laundryRevenue = toNumber(orderStats.total_revenue);
@@ -152,27 +132,6 @@ export default function Dashboard() {
                     laundryRevenue: laundryRevenue,
                     laundryExpenses: laundryExpenses,
                     laundryProfit: laundryProfit,
-                    completedOrders: toNumber(orderStats.completed_orders) + toNumber(orderStats.delivered_orders),
-                    totalOrders: toNumber(orderStats.total_orders),
-                    paymentMethods: paymentMethods.map((method: any) => ({
-                        name: String(method.payment_type || "Unknown"),
-                        count: toNumber(method.count),
-                        total: toNumber(method.total),
-                    })),
-                    topServices: topServices.map((service: any) => ({
-                        name: String(service.servicetype || "Unknown"),
-                        count: toNumber(service.count),
-                    })),
-                    commonItems: commonItems.map((item: any) => ({
-                        name: String(item.itemname || "Unknown"),
-                        count: toNumber(item.count),
-                    })),
-                    topCustomers: commonCustomers.map((customer: any) => ({
-                        name: String(customer.customer__name || "Unknown Customer"),
-                        phone: String(customer.customer__phone || ""),
-                        spent: toNumber(customer.spent),
-                        count: toNumber(customer.count),
-                    })),
                     currentMonthName: getCurrentMonthName()
                 });
             } else {
@@ -425,135 +384,6 @@ export default function Dashboard() {
                                 </span>
                             </div>
                         </div>
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-                    <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl p-6">
-                        <div className="flex items-center justify-between mb-4">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-gradient-to-br from-blue-100 to-blue-50 rounded-lg flex items-center justify-center shadow-lg">
-                                    <CheckCircle className="w-5 h-5 text-blue-600" />
-                                </div>
-                                <h3 className="text-xl font-semibold text-slate-900">Current Month Jobs</h3>
-                            </div>
-                            <span className="text-sm text-slate-500">{data.currentMonthName}</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="rounded-xl bg-slate-50 p-4">
-                                <p className="text-sm font-medium text-slate-600">Completed</p>
-                                <p className="mt-2 text-2xl font-bold text-slate-900">{data.completedOrders}</p>
-                            </div>
-                            <div className="rounded-xl bg-slate-50 p-4">
-                                <p className="text-sm font-medium text-slate-600">Total Orders</p>
-                                <p className="mt-2 text-2xl font-bold text-slate-900">{data.totalOrders}</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl p-6">
-                        <div className="flex items-center gap-3 mb-4">
-                            <div className="w-10 h-10 bg-gradient-to-br from-green-100 to-green-50 rounded-lg flex items-center justify-center shadow-lg">
-                                <CreditCard className="w-5 h-5 text-green-600" />
-                            </div>
-                            <h3 className="text-xl font-semibold text-slate-900">Payment Method Breakdown</h3>
-                        </div>
-                        {data.paymentMethods.length > 0 ? (
-                            <div className="space-y-3">
-                                {data.paymentMethods.map((method) => (
-                                    <div key={method.name} className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
-                                        <div>
-                                            <p className="text-sm font-medium text-slate-800">{method.name === 'None' ? 'Not Paid' : method.name}</p>
-                                            <p className="text-xs text-slate-500">{method.count} transactions</p>
-                                        </div>
-                                        <p className="text-sm font-semibold text-slate-900">{formatCurrency(method.total)}</p>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="flex items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 py-10 text-sm text-slate-500">
-                                No payment data for this month yet.
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-                    <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl p-6">
-                        <div className="flex items-center gap-3 mb-4">
-                            <div className="w-10 h-10 bg-gradient-to-br from-amber-100 to-amber-50 rounded-lg flex items-center justify-center shadow-lg">
-                                <Bath className="w-5 h-5 text-amber-600" />
-                            </div>
-                            <h3 className="text-lg font-semibold text-slate-900">Top Services</h3>
-                        </div>
-                        {data.topServices.length > 0 ? (
-                            <div className="space-y-3">
-                                {data.topServices.slice(0, 5).map((service, index) => (
-                                    <div key={service.name} className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
-                                        <span className="text-sm font-medium text-slate-800">{index + 1}. {service.name}</span>
-                                        <span className="text-sm font-semibold text-slate-900">{service.count}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="flex items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 py-10 text-sm text-slate-500">
-                                No service trends for this month yet.
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl p-6">
-                        <div className="flex items-center gap-3 mb-4">
-                            <div className="w-10 h-10 bg-gradient-to-br from-purple-100 to-purple-50 rounded-lg flex items-center justify-center shadow-lg">
-                                <Box className="w-5 h-5 text-purple-600" />
-                            </div>
-                            <h3 className="text-lg font-semibold text-slate-900">Common Items</h3>
-                        </div>
-                        {data.commonItems.length > 0 ? (
-                            <div className="space-y-3">
-                                {data.commonItems.slice(0, 5).map((item, index) => (
-                                    <div key={item.name} className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
-                                        <span className="text-sm font-medium text-slate-800">{index + 1}. {item.name}</span>
-                                        <span className="text-sm font-semibold text-slate-900">{item.count}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="flex items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 py-10 text-sm text-slate-500">
-                                No item trends for this month yet.
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl p-6">
-                        <div className="flex items-center gap-3 mb-4">
-                            <div className="w-10 h-10 bg-gradient-to-br from-emerald-100 to-emerald-50 rounded-lg flex items-center justify-center shadow-lg">
-                                <Users className="w-5 h-5 text-emerald-600" />
-                            </div>
-                            <h3 className="text-lg font-semibold text-slate-900">Top Customers</h3>
-                        </div>
-                        {data.topCustomers.length > 0 ? (
-                            <div className="space-y-3">
-                                {data.topCustomers.slice(0, 5).map((customer, index) => (
-                                    <div key={`${customer.name}-${index}`} className="rounded-lg bg-slate-50 px-4 py-3">
-                                        <div className="flex items-center justify-between gap-3">
-                                            <div className="min-w-0">
-                                                <p className="truncate text-sm font-medium text-slate-800">{index + 1}. {customer.name}</p>
-                                                <p className="truncate text-xs text-slate-500">{customer.phone || 'No phone'}</p>
-                                            </div>
-                                            <div className="text-right">
-                                                <p className="text-sm font-semibold text-slate-900">{formatCurrency(customer.spent)}</p>
-                                                <p className="text-xs text-slate-500">{customer.count} orders</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="flex items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 py-10 text-sm text-slate-500">
-                                No customer leaderboard for this month yet.
-                            </div>
-                        )}
                     </div>
                 </div>
 

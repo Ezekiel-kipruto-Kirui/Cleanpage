@@ -19,9 +19,12 @@ import { getUserRole, getSelectedShopType, setSelectedShopByType, isAdmin, isSta
  * Used to handle session expiry or logout.
  */
 const clearSession = () => {
+  localStorage.removeItem("access_token");
   localStorage.removeItem("accessToken");
+  localStorage.removeItem("refresh_token");
   localStorage.removeItem("refreshToken");
   localStorage.removeItem("current_user");
+  localStorage.removeItem("selected_shop");
   localStorage.removeItem("selected_shop_type");
 };
 
@@ -55,23 +58,13 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [isResetLoading, setIsResetLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [showShopSelection, setShowShopSelection] = useState(false);
-  const [showForgotPassword, setShowForgotPassword] = useState(false);
-  const [resetEmail, setResetEmail] = useState("");
-  const [resetMessage, setResetMessage] = useState<string | null>(null);
   
   const navigate = useNavigate();
 
   useEffect(() => {
-    const isRedirecting = checkAndRedirect(navigate);
-
-    // If we are not redirecting (no valid session), ensure any stale/expired data is cleared.
-    // This handles the case where the user was redirected here due to a 401 session expiry.
-    if (!isRedirecting) {
-      clearSession();
-    }
+    checkAndRedirect(navigate);
   }, [navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -112,16 +105,19 @@ export default function Login() {
       }
     } catch (error: any) {
       console.error("Login error:", error);
-      
+
+      const nextError =
+        error.response?.status === 401 || error.message?.includes("Unauthorized")
+          ? "Session expired or invalid credentials."
+          : error.message || "Login failed. Please try again.";
+
       // If error is 401 or Unauthorized, explicitly clear session
       if (error.response?.status === 401 || error.message?.includes("Unauthorized")) {
         clearSession();
-        setLoginError("Session expired or invalid credentials.");
-      } else {
-        setLoginError(error.message || "Login failed. Please try again.");
       }
-      
-      toast.error(loginError || "Login failed");
+
+      setLoginError(nextError);
+      toast.error(nextError);
     } finally {
       setIsLoading(false);
     }
@@ -137,29 +133,6 @@ export default function Login() {
     } else {
       navigate(ROUTES.fooditems, { replace: true });
       toast.success("Welcome to Hotel Dashboard!");
-    }
-  };
-
-  const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!resetEmail.trim()) {
-      setResetMessage("Please enter your email address.");
-      return;
-    }
-
-    setIsResetLoading(true);
-    setResetMessage(null);
-
-    try {
-      const response = await authApi.forgotPassword(resetEmail.trim());
-      setResetMessage(response.detail);
-      toast.success("Password reset request submitted.");
-    } catch (error: any) {
-      setResetMessage(error.message || "Failed to submit password reset request.");
-      toast.error("Could not submit password reset request.");
-    } finally {
-      setIsResetLoading(false);
     }
   };
 
@@ -269,19 +242,6 @@ export default function Login() {
                       )}
                     </button>
                   </div>
-                  <div className="mt-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setResetEmail(email);
-                        setResetMessage(null);
-                        setShowForgotPassword(true);
-                      }}
-                      className="text-sm font-medium text-blue-600 hover:text-blue-700"
-                    >
-                      Forgot password?
-                    </button>
-                  </div>
                 </div>
 
                 <button
@@ -306,59 +266,6 @@ export default function Login() {
           </div>
         </div>
       </div>
-
-      <Dialog open={showForgotPassword} onOpenChange={setShowForgotPassword}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Forgot password</DialogTitle>
-            <DialogDescription>
-              Submit your account email and we will record a password reset request from the Firebase-backed auth system for admin follow-up.
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleForgotPassword} className="space-y-4">
-            <div>
-              <label htmlFor="reset-email" className="block text-sm font-medium text-gray-700 mb-2">
-                Email address
-              </label>
-              <input
-                id="reset-email"
-                type="email"
-                value={resetEmail}
-                onChange={(e) => setResetEmail(e.target.value)}
-                className="block w-full px-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
-                placeholder="you@example.com"
-                disabled={isResetLoading}
-                required
-              />
-            </div>
-
-            {resetMessage && (
-              <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-                {resetMessage}
-              </div>
-            )}
-
-            <div className="flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setShowForgotPassword(false)}
-                className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200"
-                disabled={isResetLoading}
-              >
-                Close
-              </button>
-              <button
-                type="submit"
-                disabled={isResetLoading}
-                className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-              >
-                {isResetLoading ? "Submitting..." : "Request reset"}
-              </button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       {/* Shop Selection Dialog */}
       <Dialog open={showShopSelection} onOpenChange={setShowShopSelection}>

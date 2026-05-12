@@ -141,8 +141,7 @@ const checkTokenExpiry = (): boolean => {
 const ENDPOINTS = {
   TOKEN: `${API_BASE_URL}/auth/login`,
   REFRESH: `${API_BASE_URL}/auth/refresh`,
-  ME: `${API_BASE_URL}/auth/me`,
-  FORGOT_PASSWORD: `${API_BASE_URL}/auth/forgot-password`
+  ME: `${API_BASE_URL}/auth/me`
 } as const;
 
 const DEFAULT_HEADERS = { "Content-Type": "application/json" };
@@ -293,21 +292,6 @@ const authApi = {
     }
 
     return { access: tokenData.access, refresh: tokenData.refresh, user };
-  },
-
-  forgotPassword: async (email: string) => {
-    const response = await fetch(ENDPOINTS.FORGOT_PASSWORD, {
-      method: "POST",
-      headers: DEFAULT_HEADERS,
-      body: JSON.stringify({ email }),
-    });
-
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(payload?.detail || "Failed to submit password reset request");
-    }
-
-    return payload as { detail: string };
   },
 
   refreshToken: async () => {

@@ -4,8 +4,14 @@ import { User } from "@/services/types";
 
 export type UserRole = 'admin' | 'staff';
 export type ShopType = 'Shop A' | 'Shop B' | null;
+export const AUTH_STATE_EVENT = 'cleanpage-auth-state-changed';
 
 const isBrowser = () => typeof window !== 'undefined';
+
+const notifyAuthStateChanged = (): void => {
+    if (!isBrowser()) return;
+    window.dispatchEvent(new CustomEvent(AUTH_STATE_EVENT));
+};
 
 /* ------------------------------------------------------------------ */
 /* Storage Utilities                                                   */
@@ -61,6 +67,7 @@ export const setAuthTokens = (accessToken: string, refreshToken: string): void =
     // Backward compatibility
     localStorage.setItem('accessToken', accessToken);
     localStorage.setItem('refreshToken', refreshToken);
+    notifyAuthStateChanged();
 };
 
 export const clearAuthTokens = (): void => {
@@ -69,6 +76,7 @@ export const clearAuthTokens = (): void => {
     ['access_token', 'refresh_token', 'accessToken', 'refreshToken'].forEach(
         key => localStorage.removeItem(key)
     );
+    notifyAuthStateChanged();
 };
 
 /* ------------------------------------------------------------------ */
@@ -81,6 +89,7 @@ export const getUserData = (): User | null => {
 
 export const setUserData = (userData: User): void => {
     setToStorage('current_user', userData);
+    notifyAuthStateChanged();
 };
 
 export const setUserEmail = (email: string): void => {
@@ -113,6 +122,7 @@ export const getSelectedShop = (): ShopType => {
 export const setSelectedShop = (shop: ShopType): void => {
     if (!isBrowser()) return;
     shop ? localStorage.setItem('selected_shop', shop) : localStorage.removeItem('selected_shop');
+    notifyAuthStateChanged();
 };
 
 export const setSelectedShopByType = (shopType: 'laundry' | 'hotel'): void => {
@@ -126,6 +136,7 @@ export const getSelectedShopType = (): 'laundry' | 'hotel' | null => {
 
 export const clearSelectedShop = (): void => {
     removeFromStorage('selected_shop');
+    notifyAuthStateChanged();
 };
 
 /* ------------------------------------------------------------------ */
@@ -188,6 +199,7 @@ export const clearAuthData = (): void => {
 
     ['current_user', 'selected_shop'].forEach(removeFromStorage);
     clearAuthTokens();
+    notifyAuthStateChanged();
 };
 
 /* ------------------------------------------------------------------ */

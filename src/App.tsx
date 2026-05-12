@@ -5,7 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { MainLayout } from "@/components/layout/MainLayout";
-import { getAccessToken, getUserRole, getSelectedShop } from "@/utils/auth";
+import { AUTH_STATE_EVENT, getAccessToken, getUserRole, getSelectedShop, validateAuthState } from "@/utils/auth";
 import { ROUTES } from "./services/Routes";
 
 // Lazy load all pages. These will now be split into separate files during build.
@@ -95,21 +95,48 @@ const ProtectedRoute = ({
 };
 
 const App = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [userRole, setUserRole] = useState<"admin" | "staff" | null>(null);
   const [selectedShop, setSelectedShop] = useState<ShopType>(null);
 
   useEffect(() => {
-    const token = getAccessToken();
-    const role = getUserRole();
-    const shop = getSelectedShop();
+    setIsAuthLoading(true);
 
-    setIsAuthenticated(!!token);
-    setUserRole(role);
-    setSelectedShop(shop);
+    const resolveAuthState = () => {
+      const hasValidSession = validateAuthState();
+      const token = getAccessToken();
+      const role = getUserRole();
+      const shop = getSelectedShop();
+
+      setIsAuthenticated(hasValidSession && !!token);
+      setUserRole(hasValidSession ? role : null);
+      setSelectedShop(hasValidSession ? shop : null);
+      setIsAuthLoading(false);
+    };
+
+    resolveAuthState();
+
+    const handleStorage = (event: StorageEvent) => {
+      if (!event.key || ["access_token", "accessToken", "refresh_token", "refreshToken", "current_user", "selected_shop"].includes(event.key)) {
+        resolveAuthState();
+      }
+    };
+
+    const handleAuthStateChanged = () => {
+      resolveAuthState();
+    };
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener(AUTH_STATE_EVENT, handleAuthStateChanged);
+
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener(AUTH_STATE_EVENT, handleAuthStateChanged);
+    };
   }, []);
 
-  if (isAuthenticated === null) {
+  if (isAuthLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>

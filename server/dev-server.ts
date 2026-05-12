@@ -5,7 +5,6 @@ import { createServer as createViteServer } from "vite";
 import loginHandler from "../api/auth/login";
 import meHandler from "../api/auth/me";
 import refreshHandler from "../api/auth/refresh";
-import forgotPasswordHandler from "../api/auth/forgot-password";
 import dataHandler from "../api/data";
 import { loadLocalEnv } from "../api/_lib/env";
 import { withRequestPath } from "../api/_lib/render";
@@ -61,8 +60,6 @@ async function main(): Promise<void> {
   app.all("/api/token/refresh/", (req: Request, res: Response) => refreshHandler(bindRequest(req), res));
   app.all("/api/auth/refresh", (req: Request, res: Response) => refreshHandler(bindRequest(req), res));
   app.all("/api/auth/refresh/", (req: Request, res: Response) => refreshHandler(bindRequest(req), res));
-  app.all("/api/auth/forgot-password", (req: Request, res: Response) => forgotPasswordHandler(bindRequest(req), res));
-  app.all("/api/auth/forgot-password/", (req: Request, res: Response) => forgotPasswordHandler(bindRequest(req), res));
   app.all("/api/me", (req: Request, res: Response) => meHandler(bindRequest(req), res));
   app.all("/api/me/", (req: Request, res: Response) => meHandler(bindRequest(req), res));
   app.all("/api/auth/me", (req: Request, res: Response) => meHandler(bindRequest(req), res));

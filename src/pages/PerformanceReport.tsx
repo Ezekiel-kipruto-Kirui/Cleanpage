@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, memo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, memo, useReducer } from "react";
 import {
   TrendingUp,
   Wallet,
@@ -14,7 +14,9 @@ import {
   Users,
   Clock,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  CalendarRange,
+  ChevronDown
 } from "lucide-react";
 import Chart from 'chart.js/auto';
 import { getAccessToken } from "@/services/api";
@@ -42,9 +44,11 @@ interface DashboardResponse {
       pending_payments: number;
       partial_payments: number;
       complete_payments: number;
+      cancelled_payments?: number;
       total_pending_amount: number;
       total_partial_amount: number;
       total_complete_amount: number;
+      total_cancelled_amount?: number;
       total_collected_amount: number;
       total_balance_amount: number;
       overdue_payments: number;
@@ -76,10 +80,16 @@ interface DashboardResponse {
       total_expenses: number;
       net_profit: number;
     };
+    combined_summary?: {
+      hotel_revenue: number;
+      laundry_revenue: number;
+      combined_revenue: number;
+      transaction_count: number;
+    };
     revenue_by_shop?: Array<{ shop: string; total_revenue: string; paid: string; bal: string }>;
     balance_by_shop?: Array<{ shop: string; total_balance: string }>;
     common_customers?: Array<{ customer__name: string; customer__phone: string; count: string; spent: string }>;
-    top_services?: Array<{ servicetype: string; count: string }>;
+    top_services?: Array<{ servicetype: string; count: string; revenue?: string | number }>;
     common_items?: Array<{ itemname: string; count: string }>;
     monthly_business_growth?: Array<{
       label: string;
@@ -97,9 +107,11 @@ interface DashboardResponse {
       pending_payments: number;
       partial_payments: number;
       complete_payments: number;
+      cancelled_payments?: number;
       total_pending_amount: number;
       total_partial_amount: number;
       total_complete_amount: number;
+      total_cancelled_amount?: number;
       total_balance: number;
       total_amount_paid: number;
       total_expenses: number;
@@ -113,9 +125,11 @@ interface DashboardResponse {
       pending_payments: number;
       partial_payments: number;
       complete_payments: number;
+      cancelled_payments?: number;
       total_pending_amount: number;
       total_partial_amount: number;
       total_complete_amount: number;
+      total_cancelled_amount?: number;
       total_balance: number;
       total_amount_paid: number;
       total_expenses: number;
@@ -125,6 +139,7 @@ interface DashboardResponse {
       payment_type: string;
       count: string;
       total: string;
+      order_total?: string;
     }>;
     service_types?: Array<{
       servicetype: string;
@@ -237,23 +252,88 @@ const currentMonthRange = () => {
   const now = new Date();
   return {
     start: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0],
-    end: new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0],
+    end: now.toISOString().split('T')[0],
   };
 };
+
+type BusinessFilter = "all" | "laundry" | "hotel";
+type PaymentMethodFilter = "all" | "cash" | "mpesa" | "card";
+type StatusFilter = "all" | "paid" | "pending" | "partial" | "cancelled";
+type FilterPreset = "this-month" | "year" | "custom" | "all-years";
+
+interface FilterState {
+  startDate: string;
+  endDate: string;
+  year: number | "all";
+  business: BusinessFilter;
+  paymentMethod: PaymentMethodFilter;
+  status: StatusFilter;
+  preset: FilterPreset;
+}
+
+type FilterAction =
+  | { type: "SET_ALL"; payload: FilterState }
+  | { type: "PATCH"; payload: Partial<FilterState> }
+  | { type: "RESET"; payload: FilterState };
+
+const getCurrentYear = () => new Date().getFullYear();
+
+const getYearRange = (year: number) => ({
+  startDate: `${year}-01-01`,
+  endDate: `${year}-12-31`,
+});
+
+const createDefaultFilters = (): FilterState => {
+  const range = currentMonthRange();
+  return {
+    startDate: range.start,
+    endDate: range.end,
+    year: getCurrentYear(),
+    business: "all",
+    paymentMethod: "all",
+    status: "all",
+    preset: "this-month",
+  };
+};
+
+const createAllYearsFilters = (): FilterState => ({
+  startDate: "",
+  endDate: "",
+  year: "all",
+  business: "all",
+  paymentMethod: "all",
+  status: "all",
+  preset: "all-years",
+});
+
+function filtersReducer(state: FilterState, action: FilterAction): FilterState {
+  switch (action.type) {
+    case "SET_ALL":
+      return action.payload;
+    case "PATCH":
+      return { ...state, ...action.payload };
+    case "RESET":
+      return action.payload;
+    default:
+      return state;
+  }
+}
+
+const formatRangeLabel = (startDate: string, endDate: string) =>
+  startDate || endDate
+    ? `Selected period: ${startDate || "Start"} to ${endDate || "End"}`
+    : "Selected period: All years";
 
 // --- Main Component ---
 
 export default function PerformanceReport() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const monthRange = useMemo(() => currentMonthRange(), []);
+  const defaultFilters = useMemo(() => createDefaultFilters(), []);
+  const [filters, dispatchFilters] = useReducer(filtersReducer, defaultFilters);
 
   // State to hold full dashboard response
   const [dashboardData, setDashboardData] = useState<DashboardResponse | null>(null);
-
-  // State for Date Range Filtering
-  const [startDate, setStartDate] = useState(monthRange.start);
-  const [endDate, setEndDate] = useState(monthRange.end);
 
   // Chart Refs
   const revenueComparisonChartRef = useRef<HTMLCanvasElement>(null);
@@ -265,9 +345,11 @@ export default function PerformanceReport() {
 
   const chartInstances = useRef<Map<HTMLCanvasElement, ChartType>>(new Map());
   const updateIntervalRef = useRef<NodeJS.Timeout>();
+  const debounceTimeoutRef = useRef<NodeJS.Timeout>();
+  const skipDebounceRef = useRef(false);
 
   // --- Data Fetching ---
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (activeFilters: FilterState) => {
     setLoading(true);
     setError(null);
     try {
@@ -275,16 +357,18 @@ export default function PerformanceReport() {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      // Build query parameters
       const params = new URLSearchParams();
-      if (startDate) params.append('start_date', startDate);
-      if (endDate) params.append('end_date', endDate);
+      if (activeFilters.startDate) params.append('start_date', activeFilters.startDate);
+      if (activeFilters.endDate) params.append('end_date', activeFilters.endDate);
+      params.append('business', activeFilters.business);
+      params.append('payment_method', activeFilters.paymentMethod);
+      params.append('status', activeFilters.status);
+      if (activeFilters.year !== "all") {
+        params.append('year', String(activeFilters.year));
+      }
 
       const queryString = params.toString();
-      // CORRECTED ENDPOINT URL
       const url = `${API_BASE_URL}/Report/dashboard/${queryString ? '?' + queryString : ''}`;
-
-      console.log('[Dashboard] Fetching from:', url);
 
       const response = await fetch(url, { headers });
 
@@ -307,17 +391,36 @@ export default function PerformanceReport() {
     } finally {
       setLoading(false);
     }
-  }, [startDate, endDate]);
+  }, []);
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 60000); // Refresh every minute
+    if (skipDebounceRef.current) {
+      skipDebounceRef.current = false;
+      return;
+    }
+    if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+    debounceTimeoutRef.current = setTimeout(() => {
+      fetchData(filters);
+    }, 300);
+    return () => {
+      if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+    };
+  }, [fetchData, filters]);
+
+  const applyFiltersImmediately = useCallback((nextFilters: FilterState) => {
+    skipDebounceRef.current = true;
+    dispatchFilters({ type: "SET_ALL", payload: nextFilters });
+    void fetchData(nextFilters);
+  }, [fetchData]);
+
+  useEffect(() => {
+    const interval = setInterval(() => fetchData(filters), 60000);
     updateIntervalRef.current = interval;
 
     return () => {
       if (updateIntervalRef.current) clearInterval(updateIntervalRef.current);
     };
-  }, [fetchData]);
+  }, [fetchData, filters]);
 
   // --- Data Processing ---
 
@@ -328,23 +431,23 @@ export default function PerformanceReport() {
     const { order_stats, payment_stats, expense_stats, hotel_stats, business_growth, payment_type_stats } = data;
 
     // Basic metrics with safe access using parseNumber helper
-    const totalBusinessRevenue = parseNumber(business_growth?.total_revenue || 0);
+    const totalBusinessRevenue = parseNumber(data.combined_summary?.combined_revenue || business_growth?.total_revenue || 0);
     const totalNetProfit = parseNumber(business_growth?.net_profit || 0);
     const totalBusinessExpenses = parseNumber(business_growth?.total_expenses || 0);
 
-    const hotelRevenue = parseNumber(hotel_stats?.total_revenue || 0);
-    const laundryRevenue = parseNumber(order_stats?.total_revenue || 0);
+    const hotelRevenue = parseNumber(data.combined_summary?.hotel_revenue || hotel_stats?.total_revenue || 0);
+    const laundryRevenue = parseNumber(data.combined_summary?.laundry_revenue || order_stats?.total_revenue || 0);
     const hotelTotalOrders = parseNumber(hotel_stats?.total_orders || 0);
     const hotelNetProfit = parseNumber(hotel_stats?.net_profit || 0);
     const hotelTotalExpenses = parseNumber(hotel_stats?.total_expenses || 0);
 
     // Payment methods from payment_type_stats
-    const paymentMethods = PAYMENT_TYPES.map(type => ({
-      name: type === 'None' ? 'Not Paid' : type.charAt(0).toUpperCase() + type.slice(1),
-      amount: parseNumber(payment_type_stats?.[type]?.amount_collected) || 0,
-      count: parseNumber(payment_type_stats?.[type]?.count) || 0,
-      totalAmount: parseNumber(payment_type_stats?.[type]?.total_amount) || 0
-    })).filter(p => p.count > 0); // Only show payment methods with data
+    const paymentMethods = (data.payment_methods || []).map(method => ({
+      name: method.payment_type || 'Unknown',
+      amount: parseNumber(method.total) || 0,
+      count: parseNumber(method.count) || 0,
+      totalAmount: parseNumber(method.order_total ?? method.total) || 0
+    })).filter(p => p.count > 0 || p.amount > 0);
 
     // Shop metrics
     const shopA = data.shop_a_stats;
@@ -376,9 +479,7 @@ export default function PerformanceReport() {
 
     // Payment type chart data from payment_methods array
     const paymentMethodsData = data.payment_methods || [];
-    const paymentTypeChartLabels = paymentMethodsData.map(item =>
-      item.payment_type === 'None' ? 'Not Paid' : item.payment_type.charAt(0).toUpperCase() + item.payment_type.slice(1)
-    );
+    const paymentTypeChartLabels = paymentMethodsData.map(item => item.payment_type || 'Unknown');
     const paymentTypeChartData = paymentMethodsData.map(item => parseNumber(item.total));
     const paymentTypeChartColors = [
       COLOR_PALETTE.green,   // cash
@@ -390,6 +491,7 @@ export default function PerformanceReport() {
     return {
       // Core business metrics
       totalBusinessRevenue,
+      transactionCount: parseNumber(data.combined_summary?.transaction_count || business_growth?.total_orders || 0),
       totalNetProfit,
       totalBusinessExpenses,
 
@@ -410,6 +512,8 @@ export default function PerformanceReport() {
       totalPartialAmount: parseNumber(payment_stats?.total_partial_amount) || 0,
       completePayments: parseNumber(payment_stats?.complete_payments) || 0,
       totalCompleteAmount: parseNumber(payment_stats?.total_complete_amount) || 0,
+      cancelledPayments: parseNumber(payment_stats?.cancelled_payments) || 0,
+      totalCancelledAmount: parseNumber(payment_stats?.total_cancelled_amount) || 0,
       overduePayments: parseNumber(payment_stats?.overdue_payments) || 0,
       totalOverdueAmount: parseNumber(payment_stats?.total_overdue_amount) || 0,
       totalCollectedAmount: parseNumber(payment_stats?.total_collected_amount) || 0,
@@ -532,8 +636,8 @@ export default function PerformanceReport() {
       destroyChart(trendChartRef);
       const ctx = trendChartRef.current.getContext('2d');
       if (ctx) {
-        const labels = processedData.trendLabels.length > 0
-          ? processedData.trendLabels.map((label) => {
+        const labels = processedData.trendLabels?.length
+          ? processedData.trendLabels.map((label: string) => {
               const date = new Date(label);
               return Number.isFinite(date.getTime())
                 ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
@@ -716,26 +820,82 @@ export default function PerformanceReport() {
   }, [processedData]);
 
   // --- Handlers ---
-  const handleStartDateChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setStartDate(e.target.value);
-  }, []);
+  const handleDateRangeApply = useCallback((startDate: string, endDate: string) => {
+    applyFiltersImmediately({
+      ...filters,
+      startDate,
+      endDate,
+      year: new Date(startDate || endDate || Date.now()).getFullYear(),
+      preset: "custom",
+    });
+  }, [applyFiltersImmediately, filters]);
 
-  const handleEndDateChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setEndDate(e.target.value);
-  }, []);
+  const handleThisMonth = useCallback(() => {
+    const range = currentMonthRange();
+    applyFiltersImmediately({
+      ...filters,
+      ...range,
+      year: getCurrentYear(),
+      preset: "this-month",
+    });
+  }, [applyFiltersImmediately, filters]);
+
+  const handleYearChange = useCallback((event: React.ChangeEvent<HTMLSelectElement>) => {
+    const nextValue = event.target.value;
+    if (nextValue === "all") {
+      applyFiltersImmediately({
+        ...filters,
+        year: "all",
+        startDate: "",
+        endDate: "",
+        preset: "all-years",
+      });
+      return;
+    }
+
+    const nextYear = Number(nextValue);
+    const isCurrentYear = nextYear === getCurrentYear();
+    const nextRange = filters.preset === "this-month" && isCurrentYear
+      ? currentMonthRange()
+      : getYearRange(nextYear);
+
+    applyFiltersImmediately({
+      ...filters,
+      year: nextYear,
+      startDate: nextRange.startDate,
+      endDate: nextRange.endDate,
+      preset: isCurrentYear && filters.preset === "this-month" ? "this-month" : "year",
+    });
+  }, [applyFiltersImmediately, filters]);
+
+  const handleBusinessChange = useCallback((event: React.ChangeEvent<HTMLSelectElement>) => {
+    applyFiltersImmediately({
+      ...filters,
+      business: event.target.value as BusinessFilter,
+    });
+  }, [applyFiltersImmediately, filters]);
 
   const handleReset = useCallback(() => {
-    setStartDate(monthRange.start);
-    setEndDate(monthRange.end);
-  }, [monthRange.end, monthRange.start]);
+    applyFiltersImmediately(createAllYearsFilters());
+  }, [applyFiltersImmediately]);
+
+  const isThisMonthActive = useMemo(() => {
+    const range = currentMonthRange();
+    return filters.startDate === range.start && filters.endDate === range.end && filters.preset === "this-month";
+  }, [filters.endDate, filters.preset, filters.startDate]);
+
+  const yearOptions = useMemo(
+    () => ["all" as const, ...Array.from({ length: 4 }, (_, index) => getCurrentYear() - index)],
+    []
+  );
 
   // --- Render ---
-  if (loading) {
+  if (loading && !dashboardData) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4 md:p-6 flex items-center justify-center">
+      <div className="min-h-screen bg-slate-50 p-4 md:p-6 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="text-gray-600 mt-4 text-lg">Loading dashboard data...</p>
+          <p className="mt-4 text-[12px] text-slate-600">Loading performance report...</p>
         </div>
       </div>
     );
@@ -743,16 +903,16 @@ export default function PerformanceReport() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4 md:p-6 flex items-center justify-center">
+      <div className="min-h-screen bg-slate-50 p-4 md:p-6 flex items-center justify-center">
         <div className="text-center max-w-md">
           <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
             <AlertCircle className="h-8 w-8 text-red-600" />
           </div>
-          <h2 className="text-xl font-bold text-gray-900 mb-2">Error Loading Dashboard</h2>
-          <p className="text-gray-600 mb-4">{error}</p>
+          <h2 className="mb-2 text-[14px] font-medium text-slate-900">Error Loading Report</h2>
+          <p className="mb-4 text-[12px] text-slate-600">{error}</p>
           <button
-            onClick={() => fetchData()}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition flex items-center justify-center gap-2 mx-auto"
+            onClick={() => fetchData(filters)}
+            className="mx-auto flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-6 py-3 text-[12px] font-medium text-white transition hover:bg-slate-800"
           >
             <RefreshCw className="h-5 w-5" /> Try Again
           </button>
@@ -763,13 +923,13 @@ export default function PerformanceReport() {
 
   if (!processedData) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4 md:p-6 flex items-center justify-center">
+      <div className="min-h-screen bg-slate-50 p-4 md:p-6 flex items-center justify-center">
         <div className="text-center">
           <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
             <AlertCircle className="h-8 w-8 text-gray-400" />
           </div>
-          <h2 className="text-xl font-bold text-gray-900 mb-2">No Data Available</h2>
-          <p className="text-gray-600">No dashboard data could be loaded</p>
+          <h2 className="mb-2 text-[14px] font-medium text-slate-900">No Data Available</h2>
+          <p className="text-[12px] text-slate-600">No performance data could be loaded.</p>
         </div>
       </div>
     );
@@ -779,110 +939,128 @@ export default function PerformanceReport() {
   const totalOrders = parseNumber(processedData.shopA?.total_orders || 0) +
     parseNumber(processedData.shopB?.total_orders || 0) +
     processedData.hotelTotalOrders;
-  const isCurrentMonthRange = startDate === monthRange.start && endDate === monthRange.end;
-
   return (
-    <div className="min-h-screen p-4 md:p-6 bg-gradient-to-br from-gray-50 to-gray-100">
+    <div className="min-h-screen bg-slate-50 p-4 md:p-6">
       {/* Header */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8">
+      <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3 mb-4 md:mb-0">
-          <div className="w-2 h-8 bg-gradient-to-b from-blue-500 to-purple-600 rounded-full"></div>
+          <div className="h-6 w-1 rounded-full bg-slate-400"></div>
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Business Performance Dashboard</h1>
-            <p className="text-gray-500 text-sm mt-1">
-              {isCurrentMonthRange
-                ? `Current Month Revenue: ${monthRange.start} to ${monthRange.end}`
-                : `Date Range: ${startDate || monthRange.start} to ${endDate || monthRange.end}`}
+            <h1 className="text-[18px] font-medium text-slate-900">Performance Report</h1>
+            <p className="mt-1 text-[11px] text-slate-500">
+              {formatRangeLabel(filters.startDate, filters.endDate)}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3 bg-white rounded-xl px-4 py-3 shadow-sm border border-gray-100">
-          <Filter className="h-5 w-5 text-blue-500" />
-          <span className="font-semibold text-gray-700">
-            {isCurrentMonthRange ? 'Current Month' : 'Custom Range'}
+        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+          <Filter className="h-4 w-4 text-slate-500" />
+          <span className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-600">
+            {filters.business === "all" ? "All Revenue" : `${filters.business} only`}
           </span>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Filter Data</h2>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Start Date</label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={handleStartDateChange}
-              max={monthRange.end}
-              className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">End Date</label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={handleEndDateChange}
-              max={monthRange.end}
-              className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div className="flex gap-3 md:col-span-2">
-            <button
-              onClick={() => fetchData()}
-              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg font-medium transition flex items-center justify-center gap-2"
+      <div className="mb-6 rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="mb-4 text-[14px] font-medium text-slate-900">Filter Data</h2>
+        <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-center">
+          <button
+            onClick={handleThisMonth}
+            className={`inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-[12px] font-medium transition ${
+              isThisMonthActive
+                ? "bg-slate-900 text-white"
+                : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            This month
+          </button>
+
+          <DateRangePicker
+            startDate={filters.startDate}
+            endDate={filters.endDate}
+            onApply={handleDateRangeApply}
+          />
+
+          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-[12px] text-slate-700">
+            <span className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-500">Year</span>
+            <select
+              value={filters.year}
+              onChange={handleYearChange}
+              className="bg-transparent pr-5 outline-none"
             >
-              <RefreshCw className="h-5 w-5" /> Apply Filters
-            </button>
-            <button
-              onClick={handleReset}
-              className="flex-1 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2.5 rounded-lg font-medium transition flex items-center justify-center gap-2"
+              {yearOptions.map((year) => (
+                <option key={year} value={year}>{year === "all" ? "All years" : year}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-[12px] text-slate-700">
+            <span className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-500">Business</span>
+            <select
+              value={filters.business}
+              onChange={handleBusinessChange}
+              className="bg-transparent pr-5 outline-none"
             >
-              <Filter className="h-5 w-5" /> Clear
-            </button>
-          </div>
+              <option value="all">All</option>
+              <option value="laundry">Laundry</option>
+              <option value="hotel">Hotel</option>
+            </select>
+          </label>
+
+          <button
+            onClick={handleReset}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-[12px] font-medium text-slate-700 transition hover:bg-slate-50"
+          >
+            <Filter className="h-4 w-4" /> Clear filters
+          </button>
+
+          {loading ? (
+            <div className="inline-flex items-center gap-2 text-[11px] text-slate-500">
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              Updating report...
+            </div>
+          ) : null}
         </div>
       </div>
 
       {/* Business Overview Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-8">
+      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
         <StatCard
-          icon={<Wallet className="h-5 w-5 text-blue-600" />}
+          icon={<Wallet className="h-4 w-4 text-slate-800" />}
           bg="blue"
-          title="Total Revenue"
+          title="Combined Total"
           value={`Ksh ${formatCurrencyFull(processedData.totalBusinessRevenue)}`}
-          subtitle="Combined earnings"
+          subtitle="Hotel + Laundry"
         />
         <StatCard
-          icon={<ChartLine className="h-5 w-5 text-green-600" />}
+          icon={<Utensils className="h-4 w-4 text-blue-700" />}
           bg="green"
-          title="Net Profit"
-          value={`Ksh ${formatCurrencyFull(processedData.totalNetProfit)}`}
-          subtitle="After expenses"
+          title="Hotel Revenue"
+          value={`Ksh ${formatCurrencyFull(processedData.hotelRevenue)}`}
+          subtitle="Selected period"
         />
         <StatCard
-          icon={<Wallet className="h-5 w-5 text-red-600" />}
+          icon={<Bath className="h-4 w-4 text-teal-700" />}
           bg="red"
-          title="Total Expenses"
-          value={`Ksh ${formatCurrencyFull(processedData.totalBusinessExpenses)}`}
-          subtitle="Combined expenses"
+          title="Laundry Revenue"
+          value={`Ksh ${formatCurrencyFull(processedData.laundryRevenue)}`}
+          subtitle="Selected period"
         />
         <StatCard
-          icon={<ShoppingBag className="h-5 w-5 text-purple-600" />}
+          icon={<ShoppingBag className="h-4 w-4 text-slate-800" />}
           bg="purple"
-          title="Total Orders"
-          value={formatNumber(totalOrders)}
-          subtitle="All businesses"
+          title="Transactions"
+          value={formatNumber(processedData.transactionCount || totalOrders)}
+          subtitle="Orders and tickets"
         />
       </div>
 
       {/* Revenue Comparison & Hotel Stats */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-        <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 lg:col-span-2">
+      <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="rounded-lg border border-slate-200 bg-white p-4 lg:col-span-2">
           <div className="flex justify-between items-center mb-6">
-            <h2 className="text-lg font-bold text-gray-900">Revenue Comparison</h2>
-            <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-sm font-semibold">
+            <h2 className="text-[14px] font-medium text-slate-900">Combined Revenue Mix</h2>
+            <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700">
               Total: Ksh {formatCurrencyFull(processedData.totalBusinessRevenue)}
             </span>
           </div>
@@ -891,29 +1069,29 @@ export default function PerformanceReport() {
           </div>
           <div className="grid grid-cols-2 gap-4 mt-6">
             <div className="text-center p-3 bg-blue-50 rounded-lg">
-              <div className="text-sm font-semibold text-blue-700">Laundry Business</div>
-              <div className="text-lg font-bold text-blue-900">Ksh {formatCurrencyFull(processedData.laundryRevenue)}</div>
-              <div className="text-xs text-blue-600 mt-1">
+              <div className="text-[12px] font-medium text-blue-700">Laundry Business</div>
+              <div className="text-[20px] font-medium text-blue-900">Ksh {formatCurrencyFull(processedData.laundryRevenue)}</div>
+              <div className="mt-1 text-[11px] text-blue-600">
                 {formatNumber(parseNumber(processedData.shopA?.total_orders || 0) + parseNumber(processedData.shopB?.total_orders || 0))} orders
               </div>
             </div>
             <div className="text-center p-3 bg-red-50 rounded-lg">
-              <div className="text-sm font-semibold text-red-700">Hotel Business</div>
-              <div className="text-lg font-bold text-red-900">Ksh {formatCurrencyFull(processedData.hotelRevenue)}</div>
-              <div className="text-xs text-red-600 mt-1">
+              <div className="text-[12px] font-medium text-red-700">Hotel Business</div>
+              <div className="text-[20px] font-medium text-red-900">Ksh {formatCurrencyFull(processedData.hotelRevenue)}</div>
+              <div className="mt-1 text-[11px] text-red-600">
                 {formatNumber(processedData.hotelTotalOrders)} orders
               </div>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+        <div className="rounded-lg border border-blue-200 bg-white p-4">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
-              <div className="w-2 h-6 bg-gradient-to-b from-red-500 to-orange-600 rounded-full"></div>
-              <h2 className="text-lg font-bold text-gray-900">Hotel Business</h2>
+              <div className="h-5 w-1 rounded-full bg-blue-500"></div>
+              <h2 className="text-[14px] font-medium text-slate-900">Hotel Revenue</h2>
             </div>
-            <Utensils className="h-5 w-5 text-orange-500" />
+            <Utensils className="h-4 w-4 text-blue-500" />
           </div>
           <div className="space-y-4">
             <MetricBox
@@ -930,19 +1108,19 @@ export default function PerformanceReport() {
               color="orange"
               icon={<ShoppingBag className="h-5 w-5" />}
             />
-            <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-lg p-4 border border-green-100">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <div className="flex items-center gap-3 mb-2">
-                <ChartLine className="h-5 w-5 text-green-600" />
-                <span className="text-sm font-semibold text-gray-700">Profit & Expenses</span>
+                <ChartLine className="h-4 w-4 text-slate-600" />
+                <span className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-500">Profit & Expenses</span>
               </div>
               <div className="flex gap-4">
                 <div>
-                  <div className="text-lg font-bold text-green-600">Ksh {formatCurrencyFull(processedData.hotelNetProfit)}</div>
-                  <div className="text-xs text-gray-500">Profit</div>
+                  <div className="text-[12px] font-medium text-green-600">Ksh {formatCurrencyFull(processedData.hotelNetProfit)}</div>
+                  <div className="text-[11px] text-slate-500">Profit</div>
                 </div>
                 <div>
-                  <div className="text-lg font-bold text-blue-600">Ksh {formatCurrencyFull(processedData.hotelTotalExpenses)}</div>
-                  <div className="text-xs text-gray-500">Expenses</div>
+                  <div className="text-[12px] font-medium text-blue-600">Ksh {formatCurrencyFull(processedData.hotelTotalExpenses)}</div>
+                  <div className="text-[11px] text-slate-500">Expenses</div>
                 </div>
               </div>
             </div>
@@ -951,44 +1129,48 @@ export default function PerformanceReport() {
       </div>
 
       {/* Laundry Business Stats */}
-      <div className="mb-8">
+      <div className="mb-6 border-t border-slate-200 pt-6">
         <div className="flex items-center gap-3 mb-6">
-          <div className="w-1 h-6 bg-gradient-to-b from-blue-500 to-cyan-600 rounded-full"></div>
-          <h2 className="text-xl font-bold text-gray-900">Laundry Business</h2>
+          <div className="h-5 w-1 rounded-full bg-teal-500"></div>
+          <h2 className="text-[14px] font-medium text-slate-900">Laundry Revenue</h2>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
-          <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+          <div className="rounded-lg border border-teal-200 bg-white p-4">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
                 <Wallet className="h-5 w-5 text-blue-600" />
               </div>
               <div>
-                <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Revenue</h3>
-                <div className="text-xl font-bold text-gray-900">
+                <h3 className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-500">Revenue</h3>
+                <div className="text-[20px] font-medium text-slate-900">
                   Ksh {formatCurrencyFull(processedData.laundryRevenue)}
                 </div>
               </div>
             </div>
-            <div className="border-t border-gray-100 pt-4">
-              <h4 className="text-sm font-medium text-gray-700 mb-3">Payment Breakdown</h4>
+            <div className="border-t border-slate-100 pt-4">
+              <h4 className="mb-3 text-[12px] font-medium text-slate-500">Payment Methods</h4>
               <div className="h-48">
-                <canvas ref={paymentTypeChartRef} />
+                {processedData.paymentTypeChartData.some((value: number) => value > 0) ? (
+                  <canvas ref={paymentTypeChartRef} />
+                ) : (
+                  <EmptyState icon={<CreditCard className="h-5 w-5" />} message="No payment method data for this period." />
+                )}
               </div>
             </div>
           </div>
 
-          <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-lg bg-yellow-50 flex items-center justify-center">
                 <CreditCard className="h-5 w-5 text-yellow-600" />
               </div>
               <div>
-                <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Payments Status</h3>
-                <div className="text-xl font-bold text-gray-900">
+                <h3 className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-500">Payment Status</h3>
+                <div className="text-[20px] font-medium text-slate-900">
                   Ksh {formatCurrencyFull(processedData.totalCollectedAmount)}
                 </div>
-                <div className="text-xs text-gray-500">Collected</div>
+                <div className="text-[11px] text-slate-500">Collected</div>
               </div>
             </div>
             <div className="space-y-3 mt-4">
@@ -1014,6 +1196,13 @@ export default function PerformanceReport() {
                 icon={<CheckCircle className="h-3 w-3" />}
               />
               <PaymentStatusBadge
+                label="Cancelled"
+                count={processedData.cancelledPayments}
+                amount={processedData.totalCancelledAmount}
+                status="cancelled"
+                icon={<AlertCircle className="h-3 w-3" />}
+              />
+              <PaymentStatusBadge
                 label="Overdue"
                 count={processedData.overduePayments}
                 amount={processedData.totalOverdueAmount}
@@ -1023,32 +1212,32 @@ export default function PerformanceReport() {
             </div>
           </div>
 
-          <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center">
                   <Wallet className="h-5 w-5 text-red-600" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Expenses</h3>
-                  <div className="text-xl font-bold text-gray-900">
+                  <h3 className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-500">Expenses</h3>
+                  <div className="text-[20px] font-medium text-slate-900">
                     Ksh {formatCurrencyFull(processedData.totalExpenses)}
                   </div>
                 </div>
               </div>
             </div>
             <div className="space-y-3">
-              <div className="flex justify-between items-center p-2 bg-blue-50 rounded">
-                <span className="text-sm text-blue-700">Shop A</span>
-                <span className="font-bold text-blue-900">Ksh {formatCurrencyFull(processedData.shopAExpenses)}</span>
+              <div className="flex justify-between items-center p-2 bg-slate-50 rounded">
+                <span className="text-[12px] text-slate-700">Shop A</span>
+                <span className="text-[12px] font-medium text-slate-900">Ksh {formatCurrencyFull(processedData.shopAExpenses)}</span>
               </div>
-              <div className="flex justify-between items-center p-2 bg-orange-50 rounded">
-                <span className="text-sm text-orange-700">Shop B</span>
-                <span className="font-bold text-orange-900">Ksh {formatCurrencyFull(processedData.shopBExpenses)}</span>
+              <div className="flex justify-between items-center p-2 bg-slate-50 rounded">
+                <span className="text-[12px] text-slate-700">Shop B</span>
+                <span className="text-[12px] font-medium text-slate-900">Ksh {formatCurrencyFull(processedData.shopBExpenses)}</span>
               </div>
             </div>
-            <div className="flex items-center text-sm text-gray-500 mt-4">
-              <ChartLine className="h-3 w-3 text-red-500 mr-1" />
+            <div className="mt-4 flex items-center text-[11px] text-slate-500">
+              <ChartLine className="mr-1 h-3 w-3 text-slate-400" />
               <span>Operational costs breakdown</span>
             </div>
           </div>
@@ -1062,36 +1251,30 @@ export default function PerformanceReport() {
       </div>
 
       {/* Charts Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        <div className="bg-white rounded-xl p-6 shadow-sm border-gray-100">
+      <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
           <div className="flex justify-between items-center mb-6">
-            <h2 className="text-lg font-bold text-gray-900">Revenue Distribution by Shop</h2>
-            <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-sm font-semibold">Laundry Only</span>
+            <h2 className="text-[12px] font-medium text-slate-500">Revenue Distribution by Shop</h2>
+            <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700">Laundry</span>
           </div>
           <div className="h-64">
             {processedData.pieChartLabels.length > 0 ? (
               <canvas ref={revenueChartRef} />
             ) : (
-              <div className="h-full flex items-center justify-center text-gray-500">
-                No revenue data available
-              </div>
+              <EmptyState icon={<Wallet className="h-5 w-5" />} message="No shop revenue data available." />
             )}
           </div>
         </div>
-        <div className="bg-white rounded-xl p-6 shadow-sm border-gray-100">
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
           <div className="flex justify-between items-center mb-6">
-            <h2 className="text-lg font-bold text-gray-900">Revenue Trend</h2>
-            <span className="bg-pink-100 text-pink-800 px-3 py-1 rounded-full text-sm font-semibold">
-              {processedData.trendLabels.length > 0 ? 'Daily' : 'Monthly'}
-            </span>
+            <h2 className="text-[12px] font-medium text-slate-500">Revenue Trend</h2>
+            <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700">Daily</span>
           </div>
           <div className="h-64">
             {processedData.monthlyBusinessGrowth?.length > 0 ? (
               <canvas ref={trendChartRef} />
             ) : (
-              <div className="h-full flex items-center justify-center text-gray-500">
-                No trend data available
-              </div>
+              <EmptyState icon={<ChartLine className="h-5 w-5" />} message="No trend data available for this period." />
             )}
           </div>
         </div>
@@ -1114,93 +1297,92 @@ export default function PerformanceReport() {
           dataAvailable={processedData.itemLabels.length > 0}
         />
 
-        <div className="bg-white rounded-xl p-6 shadow-sm border-gray-100">
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
           <div className="flex justify-between items-center mb-6">
-            <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+            <h2 className="flex items-center gap-2 text-[12px] font-medium text-slate-500">
               <Users className="h-5 w-5 text-yellow-500" />
               Top Customers
             </h2>
-            <span className="bg-yellow-100 text-yellow-800 px-2 py-1 rounded text-xs font-semibold">
+            <span className="rounded bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700">
               {processedData.commonCustomers.length} customers
             </span>
           </div>
           <div className="h-72 overflow-y-auto pr-2">
             {processedData.commonCustomers.length > 0 ? processedData.commonCustomers.map((c, i) => (
-              <div key={i} className="flex items-center p-4 bg-gray-50 rounded-lg mb-3 hover:bg-gray-100 transition">
-                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold mr-4">
+              <div key={i} className="mb-2 flex items-center rounded-lg bg-slate-50 p-3">
+                <div className="mr-3 flex h-8 w-8 items-center justify-center rounded-lg bg-slate-700 text-[12px] font-medium text-white">
                   {i + 1}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-gray-900 truncate">{c.name}</div>
-                  <div className="text-xs text-gray-500 truncate">{c.phone}</div>
+                  <div className="truncate text-[12px] font-medium text-slate-900">{c.name}</div>
+                  <div className="truncate text-[11px] text-slate-500">{c.phone}</div>
                 </div>
                 <div className="text-right">
-                  <div className="font-bold text-pink-600">Ksh {formatCurrency(c.spent)}</div>
-                  <div className="text-xs text-gray-500">{c.orders} orders</div>
+                  <div className="text-[12px] font-medium text-teal-700">Ksh {formatCurrency(c.spent)}</div>
+                  <div className="text-[11px] text-slate-500">{c.orders} orders</div>
                 </div>
               </div>
             )) : (
-              <div className="h-full flex flex-col items-center justify-center text-gray-500">
-                <Users className="h-12 w-12 mb-2 opacity-50" />
-                <p>No customer data available</p>
-              </div>
+              <EmptyState icon={<Users className="h-5 w-5" />} message="No customer data available for this period." />
             )}
           </div>
         </div>
       </div>
 
       {/* Payment Methods Table */}
-      <div className="mt-8 bg-white rounded-xl p-6 shadow-sm border-gray-100">
-        <h2 className="text-lg font-bold text-gray-900 mb-6">Payment Methods Summary</h2>
-        {processedData.paymentMethods.length > 0 ? (
+      <div className="mt-8 rounded-lg border border-slate-200 bg-white p-4">
+          <h2 className="mb-4 text-[14px] font-medium text-slate-900">Payment Methods Summary</h2>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Payment Method</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Transactions</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Amount Collected</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Total Amount</th>
+                <tr className="border-b border-slate-200">
+                  <th className="px-4 py-3 text-left text-[12px] font-medium uppercase tracking-[0.05em] text-slate-500">Payment Method</th>
+                  <th className="px-4 py-3 text-left text-[12px] font-medium uppercase tracking-[0.05em] text-slate-500">Transactions</th>
+                  <th className="px-4 py-3 text-left text-[12px] font-medium uppercase tracking-[0.05em] text-slate-500">Amount Collected</th>
+                  <th className="px-4 py-3 text-left text-[12px] font-medium uppercase tracking-[0.05em] text-slate-500">Order Total</th>
                 </tr>
               </thead>
               <tbody>
-                {processedData.paymentMethods.map((method, i) => (
-                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-3 px-4">
-                      <span className={`px-2 py-1 rounded text-xs font-medium ${method.name === 'Cash' ? 'bg-green-100 text-green-800' :
-                          method.name === 'Mpesa' ? 'bg-blue-100 text-blue-800' :
+                {processedData.paymentMethods.length > 0 ? (
+                  processedData.paymentMethods.map((method, i) => (
+                  <tr key={i} className={`border-b border-slate-200/80 ${i % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'}`}>
+                    <td className="px-4 py-3 text-[12px]">
+                      <span className={`rounded px-2 py-1 text-[11px] font-medium ${method.name === 'Cash' ? 'bg-green-100 text-green-800' :
+                          method.name === 'M-Pesa' ? 'bg-blue-100 text-blue-800' :
                             method.name === 'Card' ? 'bg-purple-100 text-purple-800' :
                               method.name === 'Not Paid' ? 'bg-red-100 text-red-800' :
-                                'bg-gray-100 text-gray-800'
+                                'bg-slate-100 text-slate-700'
                         }`}>
                         {method.name}
                       </span>
                     </td>
-                    <td className="py-3 px-4">
-                      <span className="font-medium text-gray-900">{formatNumber(method.count)}</span>
+                    <td className="px-4 py-3 text-[12px] text-slate-900">
+                      <span className="font-medium">{formatNumber(method.count)}</span>
                     </td>
-                    <td className="py-3 px-4">
-                      <span className="font-bold text-green-600">Ksh {formatCurrencyFull(method.amount)}</span>
+                    <td className="px-4 py-3 text-[12px]">
+                      <span className="font-medium text-teal-700">Ksh {formatCurrencyFull(method.amount)}</span>
                     </td>
-                    <td className="py-3 px-4">
-                      <span className="font-medium text-gray-700">Ksh {formatCurrencyFull(method.totalAmount)}</span>
+                    <td className="px-4 py-3 text-[12px]">
+                      <span className="font-medium text-slate-700">Ksh {formatCurrencyFull(method.totalAmount)}</span>
                     </td>
                   </tr>
-                ))}
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4} className="px-4 py-10">
+                      <EmptyState icon={<CreditCard className="h-5 w-5" />} message="No payment method activity for this period." />
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
-        ) : (
-          <div className="flex items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50 py-10 text-sm text-gray-500">
-            No payment method data for the selected period.
-          </div>
-        )}
-      </div>
+        </div>
 
       {error && (
-        <div className="fixed bottom-4 right-4 bg-red-100 text-red-700 p-4 rounded-lg shadow-lg flex justify-between items-center z-50 max-w-md">
+        <div className="fixed bottom-4 right-4 z-50 flex max-w-md items-center justify-between rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
           <span>{error}</span>
-          <button onClick={() => setError(null)} className="text-red-900 font-bold ml-4">✕</button>
+          <button onClick={() => setError(null)} className="ml-4 font-medium text-red-900">✕</button>
         </div>
       )}
     </div>
@@ -1208,6 +1390,102 @@ export default function PerformanceReport() {
 }
 
 // --- Optimized Sub-Components ---
+
+const DateRangePicker = memo(({
+  startDate,
+  endDate,
+  onApply,
+}: {
+  startDate: string;
+  endDate: string;
+  onApply: (startDate: string, endDate: string) => void;
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [draftStartDate, setDraftStartDate] = useState(startDate);
+  const [draftEndDate, setDraftEndDate] = useState(endDate);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setDraftStartDate(startDate);
+      setDraftEndDate(endDate);
+    }
+  }, [endDate, isOpen, startDate]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isOpen]);
+
+  const applyDraft = () => {
+    onApply(draftStartDate, draftEndDate);
+    setIsOpen(false);
+  };
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setIsOpen((open) => !open)}
+        className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-[12px] text-slate-700 transition hover:bg-slate-50"
+      >
+        <CalendarRange className="h-4 w-4 text-slate-500" />
+        <span>{startDate || endDate ? `${startDate || "Start"} - ${endDate || "End"}` : "All years"}</span>
+        <ChevronDown className="h-4 w-4 text-slate-400" />
+      </button>
+
+      {isOpen ? (
+        <div className="absolute left-0 top-full z-20 mt-2 w-[320px] rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid grid-cols-1 gap-3">
+            <div>
+              <label className="mb-2 block text-[12px] font-medium text-slate-600">Start date</label>
+              <input
+                type="date"
+                value={draftStartDate}
+                onChange={(event) => setDraftStartDate(event.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] outline-none focus:border-slate-400"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-[12px] font-medium text-slate-600">End date</label>
+              <input
+                type="date"
+                value={draftEndDate}
+                onChange={(event) => setDraftEndDate(event.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] outline-none focus:border-slate-400"
+              />
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setIsOpen(false)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={applyDraft}
+              className="rounded-lg bg-slate-900 px-3 py-2 text-[12px] font-medium text-white hover:bg-slate-800"
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+});
 
 const StatCard = memo(({ icon, bg, title, value, subtitle }: {
   icon: React.ReactNode,
@@ -1218,19 +1496,16 @@ const StatCard = memo(({ icon, bg, title, value, subtitle }: {
 }) => {
   const classes = STYLE_MAPS.card[bg];
   return (
-    <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition">
-      <div className="flex items-center justify-between mb-4">
-        <div className={`w-10 h-10 rounded-lg ${classes.split(' ')[0]} flex items-center justify-center`}>
+    <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${classes.split(' ')[0]}`}>
           {icon}
         </div>
-        <span className={`${classes} text-xs font-semibold px-2 py-1 rounded-full capitalize`}>
-          Total
-        </span>
       </div>
-      <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">{title}</h3>
-      <div className="text-xl font-bold text-gray-900 mb-1">{value}</div>
-      <div className="flex items-center text-xs text-gray-500">
-        <TrendingUp className="h-3 w-3 text-green-500 mr-1" />
+      <h3 className="mb-1 text-[11px] font-medium uppercase tracking-[0.05em] text-slate-500">{title}</h3>
+      <div className="mb-1 text-[20px] font-medium text-slate-900">{value}</div>
+      <div className="flex items-center text-[11px] text-slate-500">
+        <TrendingUp className="mr-1 h-3 w-3 text-slate-400" />
         <span>{subtitle}</span>
       </div>
     </div>
@@ -1244,18 +1519,16 @@ const MetricBox = memo(({ label, value, sub, color, icon }: {
   color: string;
   icon: React.ReactNode
 }) => {
-  const classes = STYLE_MAPS.metric[color as keyof typeof STYLE_MAPS.metric] || STYLE_MAPS.metric.blue;
-
   return (
-    <div className={`bg-gradient-to-br ${classes} rounded-lg p-4 border hover:shadow-sm transition`}>
-      <div className="flex items-center gap-3 mb-2">
-        <div className={`w-8 h-8 rounded-lg bg-white flex items-center justify-center shadow-sm`}>
+    <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className="mb-2 flex items-center gap-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100">
           {icon}
         </div>
-        <span className="text-sm font-semibold text-gray-700">{label}</span>
+        <span className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-500">{label}</span>
       </div>
-      <div className="text-xl font-bold text-gray-900 mb-1">{value}</div>
-      {sub && <div className="text-xs text-gray-500">{sub}</div>}
+      <div className="mb-1 text-[20px] font-medium text-slate-900">{value}</div>
+      {sub && <div className="text-[11px] text-slate-500">{sub}</div>}
     </div>
   );
 });
@@ -1264,21 +1537,21 @@ const PaymentStatusBadge = memo(({ label, count, amount, status, icon }: {
   label: string;
   count?: number;
   amount?: number;
-  status: 'pending' | 'partial' | 'complete' | 'overdue';
+  status: 'pending' | 'partial' | 'complete' | 'overdue' | 'cancelled';
   icon: React.ReactNode;
 }) => {
-  const classes = STYLE_MAPS.status[status];
+  const classes = status === 'cancelled' ? 'bg-red-100 text-red-700' : STYLE_MAPS.status[status as keyof typeof STYLE_MAPS.status];
 
   return (
-    <div className="flex justify-between items-center p-2 hover:bg-gray-50 rounded">
+    <div className="flex items-center justify-between rounded-md px-2 py-2 odd:bg-slate-50">
       <div className="flex items-center gap-2">
-        <span className={`${classes} px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1`}>
+        <span className={`${classes} flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium`}>
           {icon}
           <span>{count || 0}</span>
         </span>
-        <span className="text-sm text-gray-700">{label}</span>
+        <span className="text-[12px] text-slate-700">{label}</span>
       </div>
-      <span className={`text-xs font-medium ${amount ? 'text-gray-900' : 'text-gray-500'}`}>
+      <span className={`text-[12px] font-medium ${amount ? 'text-slate-900' : 'text-slate-500'}`}>
         {amount ? `Ksh ${formatCurrency(amount)}` : 'Ksh 0'}
       </span>
     </div>
@@ -1295,17 +1568,17 @@ const ShopPerformanceCard = memo(({ title, metrics }: { title: string, metrics?:
   };
 
   return (
-    <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 hover:shadow-md transition">
-      <div className="flex items-center justify-between mb-6">
+    <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-2 h-6 bg-gradient-to-b from-indigo-500 to-purple-600 rounded-full"></div>
-          <h2 className="text-lg font-bold text-gray-900">{title} Performance</h2>
+          <div className="h-5 w-1 rounded-full bg-teal-500"></div>
+          <h2 className="text-[14px] font-medium text-slate-900">{title}</h2>
         </div>
-        <span className="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-full text-sm font-semibold">
+        <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700">
           Ksh {formatCurrencyFull(getMetric('revenue'))}
         </span>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <MetricBox
           label="Revenue"
           value={`Ksh ${formatCurrencyFull(getMetric('revenue'))}`}
@@ -1320,19 +1593,19 @@ const ShopPerformanceCard = memo(({ title, metrics }: { title: string, metrics?:
           color="blue"
           icon={<ShoppingBag className="h-5 w-5 text-blue-600" />}
         />
-        <div className="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-lg p-4 border border-purple-100">
-          <div className="flex items-center gap-3 mb-2">
-            <CreditCard className="h-5 w-5 text-purple-600" />
-            <span className="text-sm font-semibold text-gray-700">Payments</span>
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div className="mb-2 flex items-center gap-3">
+            <CreditCard className="h-4 w-4 text-slate-600" />
+            <span className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-500">Payments</span>
           </div>
-          <div className="flex flex-col gap-1 text-xs">
+          <div className="flex flex-col gap-1 text-[11px]">
             <div className="flex justify-between">
-              <span className="text-yellow-600">{getMetric('pending_payments')} pending</span>
-              <span className="text-yellow-600">Ksh {formatCurrency(getMetric('total_pending_amount'))}</span>
+              <span className="text-amber-700">{getMetric('pending_payments')} pending</span>
+              <span className="text-amber-700">Ksh {formatCurrency(getMetric('total_pending_amount'))}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-blue-600">{getMetric('partial_payments')} partial</span>
-              <span className="text-blue-600">Ksh {formatCurrency(getMetric('total_partial_amount'))}</span>
+              <span className="text-slate-600">{getMetric('partial_payments')} partial</span>
+              <span className="text-slate-600">Ksh {formatCurrency(getMetric('total_partial_amount'))}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-green-600">{getMetric('complete_payments')} complete</span>
@@ -1340,19 +1613,19 @@ const ShopPerformanceCard = memo(({ title, metrics }: { title: string, metrics?:
             </div>
           </div>
         </div>
-        <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-lg p-4 border border-green-100">
-          <div className="flex items-center gap-3 mb-2">
-            <ChartLine className="h-5 w-5 text-green-600" />
-            <span className="text-sm font-semibold text-gray-700">Profit & Expenses</span>
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div className="mb-2 flex items-center gap-3">
+            <ChartLine className="h-4 w-4 text-slate-600" />
+            <span className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-500">Profit & Expenses</span>
           </div>
           <div className="flex flex-col gap-2">
             <div>
-              <div className="text-md font-bold text-green-600">Ksh {formatCurrencyFull(getMetric('net_profit'))}</div>
-              <div className="text-xs text-gray-500">Profit</div>
+              <div className="text-[12px] font-medium text-green-600">Ksh {formatCurrencyFull(getMetric('net_profit'))}</div>
+              <div className="text-[11px] text-slate-500">Profit</div>
             </div>
             <div>
-              <div className="text-md font-bold text-blue-600">Ksh {formatCurrencyFull(getMetric('total_expenses'))}</div>
-              <div className="text-xs text-gray-500">Expenses</div>
+              <div className="text-[12px] font-medium text-blue-600">Ksh {formatCurrencyFull(getMetric('total_expenses'))}</div>
+              <div className="text-[11px] text-slate-500">Expenses</div>
             </div>
           </div>
         </div>
@@ -1371,9 +1644,9 @@ const ChartCard = memo(({ title, icon, canvasRef, dataAvailable, color = "gray" 
   const titleColorClass = STYLE_MAPS.chartTitle[color] || STYLE_MAPS.chartTitle.gray;
 
   return (
-    <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 hover:shadow-md transition">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+    <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-[12px] font-medium text-slate-500">
           {icon}
           <span className={titleColorClass}>{title}</span>
         </h2>
@@ -1382,12 +1655,21 @@ const ChartCard = memo(({ title, icon, canvasRef, dataAvailable, color = "gray" 
         {dataAvailable ? (
           <canvas ref={canvasRef} />
         ) : (
-          <div className="flex flex-col items-center justify-center h-full text-center text-gray-500">
+          <div className="flex h-full flex-col items-center justify-center text-center text-slate-500">
             {icon}
-            <p className="mt-2">No data available</p>
+            <p className="mt-2 text-[12px]">No data available</p>
           </div>
         )}
       </div>
     </div>
   );
 });
+
+const EmptyState = memo(({ icon, message }: { icon: React.ReactNode; message: string }) => (
+  <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-slate-500">
+    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+      {icon}
+    </div>
+    <p className="text-[12px]">{message}</p>
+  </div>
+));

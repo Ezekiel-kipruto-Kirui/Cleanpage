@@ -11,7 +11,6 @@ import {
   normalizeCollection,
   recordIdFromEndpoint,
 } from "./_lib/firebase.js";
-import { sendSms } from "./_lib/sms.js";
 import type { RequestLike, ResponseLike } from "./_lib/types.js";
 
 type FirebaseRecord = Record<string, unknown> & { id?: number | string };
@@ -170,51 +169,6 @@ async function findCustomerByPhone(phone: string): Promise<FirebaseRecord | null
   const customers = listRecords(await getCollectionRecords("LaundryApp_customer"));
   const normalized = String(phone || "").replace(/\s+/g, "");
   return customers.find((customer) => String(customer.phone || "").replace(/\s+/g, "") === normalized) || null;
-}
-
-async function getLaundryCustomerById(customerId: unknown): Promise<FirebaseRecord | null> {
-  if (customerId && typeof customerId === "object" && "id" in customerId) {
-    customerId = (customerId as { id?: unknown }).id;
-  }
-  if (customerId === undefined || customerId === null || customerId === "") return null;
-  const customers = listRecords(await getCollectionRecords("LaundryApp_customer"));
-  return customers.find((customer) => String(customer.id || "") === String(customerId)) || null;
-}
-
-function orderNotificationMessage(
-  customerName: string,
-  orderCode: string,
-  trigger: "created" | "completed" | "delivered" | "paid",
-): string | null {
-  if (trigger === "created") {
-    return `Hello ${customerName}! Your order ${orderCode} has been received and is now being processed.`;
-  }
-  if (trigger === "completed") {
-    return `Hi ${customerName}, your order ${orderCode} is now complete. Thank you for choosing our laundry service.`;
-  }
-  if (trigger === "delivered") {
-    return `Hello ${customerName}, your order ${orderCode} has been delivered successfully. We appreciate your trust in our services.`;
-  }
-  if (trigger === "paid") {
-    return `Hello ${customerName}, payment for order ${orderCode} has been received successfully. Thank you.`;
-  }
-  return null;
-}
-
-async function notifyLaundryOrder(record: FirebaseRecord, trigger: "created" | "completed" | "delivered" | "paid"): Promise<void> {
-  const customerId = fieldValue(record, ["customer_id"]) ?? fieldValue(record, ["customer"]);
-  const customer = await getLaundryCustomerById(customerId);
-  const phone = String(customer?.phone || "").trim();
-  const customerName = String(customer?.name || "Customer").trim() || "Customer";
-  const orderCode = String(record.uniquecode || uniqueOrderCode(record.id || ""));
-  const message = orderNotificationMessage(customerName, orderCode, trigger);
-
-  if (!phone || !message) return;
-
-  const result = await sendSms(phone, message);
-  if (!result.success) {
-    console.warn(`SMS notification failed for order ${orderCode}: ${result.details}`);
-  }
 }
 
 async function enrichHotelOrderItems(records: Array<FirebaseRecord>): Promise<Array<FirebaseRecord>> {
@@ -385,7 +339,7 @@ function effectiveRange(query: RequestLike["query"]): { start: Date; end: Date }
   const endValue = query.end_date || query.created_at__date__lte || query.created_at__lte;
 
   if (!startValue && !endValue) {
-    return currentMonthRange();
+    return null;
   }
 
   const start = parseDate(startValue) || currentMonthRange().start;
@@ -437,7 +391,13 @@ function rangeLabels(range: { start: Date; end: Date }): string[] {
 }
 
 function paymentTypeLabel(value: string): string {
-  if (value === "None") return "Not Paid";
+  const normalized = String(value || "").toLowerCase();
+  if (!normalized || normalized === "none") return "Not Paid";
+  if (normalized === "mpesa" || normalized === "m-pesa" || normalized === "m_pesa") return "M-Pesa";
+  if (normalized === "bank_transfer") return "Bank Transfer";
+  if (normalized === "card") return "Card";
+  if (normalized === "cash") return "Cash";
+  if (normalized === "other") return "Other";
   return value || "Unknown";
 }
 
@@ -460,7 +420,8 @@ async function dashboardResponse(query: RequestLike["query"]): Promise<Record<st
     getCollectionRecords("HotelApp_hotelexpenserecord"),
   ]);
 
-  const range = effectiveRange(query) || currentMonthRange();
+  const range = effectiveRange(query);
+  const trendRange = range || currentMonthRange();
   const orders = await enrichLaundryOrders(filterRecords(listRecords(laundryOrders), query));
   const orderIds = new Set(orders.map((record) => String(record.id || "")));
   const orderItemRecords = recordsForOrderIds(listRecords(laundryOrderItems), orderIds);
@@ -493,13 +454,22 @@ async function dashboardResponse(query: RequestLike["query"]): Promise<Record<st
     total_amount_paid: sumRecords(orders, "amount_paid"),
   };
 
+  const laundryStatusTotals = {
+    pending: orders.reduce((sum, record) => sum + (record.payment_status === "pending" ? toNumber(record.total_price) : 0), 0),
+    partial: orders.reduce((sum, record) => sum + (record.payment_status === "partial" ? toNumber(record.total_price) : 0), 0),
+    completed: orders.reduce((sum, record) => sum + (record.payment_status === "completed" ? toNumber(record.total_price) : 0), 0),
+    cancelled: orders.reduce((sum, record) => sum + (record.payment_status === "cancelled" ? toNumber(record.total_price) : 0), 0),
+  };
+
   const paymentStats = {
     pending_payments: countBy(orders, (record) => record.payment_status === "pending"),
     partial_payments: countBy(orders, (record) => record.payment_status === "partial"),
     complete_payments: countBy(orders, (record) => record.payment_status === "completed"),
-    total_pending_amount: orders.reduce((sum, record) => sum + (record.payment_status === "pending" ? toNumber(record.total_price) : 0), 0),
-    total_partial_amount: orders.reduce((sum, record) => sum + (record.payment_status === "partial" ? toNumber(record.amount_paid) : 0), 0),
-    total_complete_amount: orders.reduce((sum, record) => sum + (record.payment_status === "completed" ? toNumber(record.total_price) : 0), 0),
+    cancelled_payments: countBy(orders, (record) => record.payment_status === "cancelled"),
+    total_pending_amount: laundryStatusTotals.pending,
+    total_partial_amount: laundryStatusTotals.partial,
+    total_complete_amount: laundryStatusTotals.completed,
+    total_cancelled_amount: laundryStatusTotals.cancelled,
     total_collected_amount: sumRecords(orders, "amount_paid"),
     total_balance_amount: sumRecords(orders, "balance"),
     overdue_payments: countBy(
@@ -522,9 +492,12 @@ async function dashboardResponse(query: RequestLike["query"]): Promise<Record<st
   for (const record of orders) {
     const paymentType = String(record.payment_type || "Unknown");
     const current = paymentTypeStats[paymentType] || { count: 0, total_amount: 0, amount_collected: 0 };
-    current.count += 1;
-    current.total_amount += toNumber(record.total_price);
-    current.amount_collected += toNumber(record.amount_paid);
+    const amountPaid = toNumber(record.amount_paid);
+    if (amountPaid > 0 || paymentType !== "None") {
+      current.count += 1;
+    }
+    current.total_amount += amountPaid;
+    current.amount_collected += amountPaid;
     paymentTypeStats[paymentType] = current;
   }
 
@@ -592,22 +565,28 @@ async function dashboardResponse(query: RequestLike["query"]): Promise<Record<st
 
   const paymentMethods = Object.entries(paymentTypeStats)
     .map(([payment_type, stats]) => ({
-      payment_type,
+      payment_type: paymentTypeLabel(payment_type),
       count: stats.count,
-      total: stats.total_amount,
+      total: stats.amount_collected,
+      order_total: stats.total_amount,
     }))
+    .filter((method) => method.count > 0 || method.total > 0)
     .sort((a, b) => b.total - a.total);
 
-  const topServiceCounter = new Map<string, number>();
+  const topServiceCounter = new Map<string, { count: number; revenue: number }>();
   for (const item of orderItemRecords) {
+    const itemRevenue = toNumber(item.total_item_price || item.unit_price || 0);
     for (const service of normalizeListField(item.servicetype)) {
-      topServiceCounter.set(service, (topServiceCounter.get(service) || 0) + 1);
+      const current = topServiceCounter.get(service) || { count: 0, revenue: 0 };
+      current.count += 1;
+      current.revenue += itemRevenue;
+      topServiceCounter.set(service, current);
     }
   }
   const topServices = Array.from(topServiceCounter.entries())
-    .sort((a, b) => b[1] - a[1])
+    .sort((a, b) => (b[1].revenue - a[1].revenue) || (b[1].count - a[1].count))
     .slice(0, 10)
-    .map(([servicetype, count]) => ({ servicetype, count }));
+    .map(([servicetype, metrics]) => ({ servicetype, count: metrics.count, revenue: metrics.revenue }));
 
   const itemCounter = new Map<string, number>();
   for (const item of orderItemRecords) {
@@ -620,7 +599,7 @@ async function dashboardResponse(query: RequestLike["query"]): Promise<Record<st
     .slice(0, 5)
     .map(([itemname, count]) => ({ itemname, count }));
 
-  const trendLabels = rangeLabels(range);
+  const trendLabels = rangeLabels(trendRange);
   const laundryTrend = groupRevenueSeries(
     orders,
     trendLabels,
@@ -654,6 +633,12 @@ async function dashboardResponse(query: RequestLike["query"]): Promise<Record<st
         total_orders: orderStats.total_orders + hotelStats.total_orders,
         total_expenses: totalExpenses,
         net_profit: totalRevenue - totalExpenses,
+      },
+      combined_summary: {
+        hotel_revenue: hotelRevenue,
+        laundry_revenue: laundryRevenue,
+        combined_revenue: totalRevenue,
+        transaction_count: orderStats.total_orders + hotelStats.total_orders,
       },
       revenue_by_shop: [
         { shop: "Shop A", total_revenue: shopAStats.revenue, paid: shopAStats.total_amount_paid, bal: shopAStats.total_balance },
@@ -755,15 +740,6 @@ export default async function handler(req: RequestLike, res: ResponseLike): Prom
 
     if (req.method === "POST") {
       const body = await readJson<Record<string, unknown>>(req);
-      if (String(app || "").toLowerCase() === "laundry" && segments[0] === "send-sms") {
-        const result = await sendSms(body.to_number, body.message);
-        if (!result.success) {
-          sendJson(res, result.error === "SMS not configured" ? 503 : 400, result);
-          return;
-        }
-        sendJson(res, 200, result);
-        return;
-      }
 
       const records = await firebaseGet(resolvedCollection).catch(() => ({} as Record<string, { id?: number | string }>));
       const nextRecordId = (body.id || nextId(records)) as string | number;
@@ -807,7 +783,6 @@ export default async function handler(req: RequestLike, res: ResponseLike): Prom
           }));
         }
 
-        await notifyLaundryOrder(record, "created");
       }
 
       sendJson(res, 201, record);
@@ -821,7 +796,6 @@ export default async function handler(req: RequestLike, res: ResponseLike): Prom
       }
 
       const body = await readJson<Record<string, unknown>>(req);
-      const existingRecord = (await firebaseGet(`${resolvedCollection}/${recordId}`).catch(() => null)) as FirebaseRecord | null;
       const record = { ...body, id: Number(recordId) || recordId };
       const isLaundryOrder = resolvedCollection === "LaundryApp_order";
       const payload = isLaundryOrder
@@ -830,26 +804,6 @@ export default async function handler(req: RequestLike, res: ResponseLike): Prom
       const saved = req.method === "PUT"
         ? await firebasePut(`${resolvedCollection}/${recordId}`, payload)
         : await firebasePatch(`${resolvedCollection}/${recordId}`, payload);
-      const mergedRecord = { ...(existingRecord || {}), ...(saved as FirebaseRecord) } as FirebaseRecord;
-
-      if (isLaundryOrder && existingRecord) {
-        const previousOrderStatus = String(existingRecord.order_status || "");
-        const nextOrderStatus = String(mergedRecord.order_status || previousOrderStatus);
-        const previousPaymentStatus = String(existingRecord.payment_status || "");
-        const nextPaymentStatus = String(mergedRecord.payment_status || previousPaymentStatus);
-
-        if (previousOrderStatus !== "Completed" && nextOrderStatus === "Completed") {
-          await notifyLaundryOrder(mergedRecord, "completed");
-        }
-
-        if (previousOrderStatus !== "Delivered_picked" && nextOrderStatus === "Delivered_picked") {
-          await notifyLaundryOrder(mergedRecord, "delivered");
-        }
-
-        if (previousPaymentStatus !== "completed" && nextPaymentStatus === "completed") {
-          await notifyLaundryOrder(mergedRecord, "paid");
-        }
-      }
 
       sendJson(res, 200, saved);
       return;
