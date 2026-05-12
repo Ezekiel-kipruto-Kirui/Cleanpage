@@ -367,62 +367,316 @@ function orderSummary(records: Array<FirebaseRecord>): Record<string, unknown> {
   };
 }
 
+function parseDate(value: unknown): Date | null {
+  if (!value) return null;
+  const date = new Date(String(value));
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function currentMonthRange(): { start: Date; end: Date } {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  return { start, end };
+}
+
+function effectiveRange(query: RequestLike["query"]): { start: Date; end: Date } | null {
+  const startValue = query.start_date || query.created_at__date__gte || query.created_at__gte;
+  const endValue = query.end_date || query.created_at__date__lte || query.created_at__lte;
+
+  if (!startValue && !endValue) {
+    return currentMonthRange();
+  }
+
+  const start = parseDate(startValue) || currentMonthRange().start;
+  const end = parseDate(endValue) || currentMonthRange().end;
+  return { start, end };
+}
+
+function recordsForOrderIds(records: Array<FirebaseRecord>, orderIds: Set<string>): Array<FirebaseRecord> {
+  return records.filter((record) => orderIds.has(String(record.order_id || record.order || "")));
+}
+
+function normalizeListField(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String).map((item) => item.trim()).filter(Boolean);
+  if (typeof value === "string") return value.split(",").map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function sumRecords(records: Array<FirebaseRecord>, field: string): number {
+  return records.reduce((sum, record) => sum + toNumber(record[field]), 0);
+}
+
+function countBy(records: Array<FirebaseRecord>, predicate: (record: FirebaseRecord) => boolean): number {
+  return records.reduce((count, record) => count + (predicate(record) ? 1 : 0), 0);
+}
+
+function groupRevenueSeries(
+  records: Array<FirebaseRecord>,
+  labels: string[],
+  keyForRecord: (record: FirebaseRecord) => string | null,
+  revenueForRecord: (record: FirebaseRecord) => number,
+): number[] {
+  const totals = new Map<string, number>(labels.map((label) => [label, 0]));
+  for (const record of records) {
+    const key = keyForRecord(record);
+    if (!key || !totals.has(key)) continue;
+    totals.set(key, (totals.get(key) || 0) + revenueForRecord(record));
+  }
+  return labels.map((label) => totals.get(label) || 0);
+}
+
+function rangeLabels(range: { start: Date; end: Date }): string[] {
+  const labels: string[] = [];
+  const cursor = new Date(range.start);
+  while (cursor <= range.end) {
+    labels.push(cursor.toISOString().slice(0, 10));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return labels;
+}
+
+function paymentTypeLabel(value: string): string {
+  if (value === "None") return "Not Paid";
+  return value || "Unknown";
+}
+
 async function dashboardResponse(query: RequestLike["query"]): Promise<Record<string, unknown>> {
   const [
     laundryOrders,
+    laundryOrderItems,
     laundryExpenses,
+    customers,
+    hotelOrders,
     hotelItems,
     hotelExpenses,
   ] = await Promise.all([
     getCollectionRecords("LaundryApp_order"),
+    getCollectionRecords("LaundryApp_orderitem"),
     getCollectionRecords("LaundryApp_expenserecord"),
+    getCollectionRecords("LaundryApp_customer"),
+    getCollectionRecords("HotelApp_hotelorder"),
     getCollectionRecords("HotelApp_hotelorderitem"),
     getCollectionRecords("HotelApp_hotelexpenserecord"),
   ]);
 
-  const orders = filterRecords(listRecords(laundryOrders), query);
+  const range = effectiveRange(query) || currentMonthRange();
+  const orders = await enrichLaundryOrders(filterRecords(listRecords(laundryOrders), query));
+  const orderIds = new Set(orders.map((record) => String(record.id || "")));
+  const orderItemRecords = recordsForOrderIds(listRecords(laundryOrderItems), orderIds);
   const laundryExpenseRecords = filterRecords(listRecords(laundryExpenses), query);
-  const hotelOrderItems = filterRecords(await enrichHotelOrderItems(listRecords(hotelItems)), query);
+
+  const hotelOrderRecords = filterRecords(listRecords(hotelOrders), query);
+  const hotelOrderIds = new Set(hotelOrderRecords.map((record) => String(record.id || "")));
+  const hotelOrderItems = (await enrichHotelOrderItems(listRecords(hotelItems))).filter((record) =>
+    hotelOrderIds.has(String(record.order_id || record.order || ""))
+  );
   const hotelExpenseRecords = filterRecords(listRecords(hotelExpenses), query);
 
-  const laundryRevenue = orders.reduce((sum, record) => sum + toNumber(record.total_price), 0);
-  const laundryExpenseTotal = laundryExpenseRecords.reduce((sum, record) => sum + toNumber(record.amount), 0);
+  const customerById = new Map(listRecords(customers).map((customer) => [String(customer.id), customer]));
+
+  const laundryRevenue = sumRecords(orders, "total_price");
+  const laundryExpenseTotal = sumRecords(laundryExpenseRecords, "amount");
   const hotelRevenue = hotelOrderItems.reduce((sum, record) => sum + hotelItemRevenue(record), 0);
-  const hotelExpenseTotal = hotelExpenseRecords.reduce((sum, record) => sum + toNumber(record.amount), 0);
+  const hotelExpenseTotal = sumRecords(hotelExpenseRecords, "amount");
   const totalRevenue = laundryRevenue + hotelRevenue;
   const totalExpenses = laundryExpenseTotal + hotelExpenseTotal;
+
+  const orderStats = {
+    total_orders: orders.length,
+    pending_orders: countBy(orders, (record) => record.order_status === "pending"),
+    completed_orders: countBy(orders, (record) => record.order_status === "Completed"),
+    delivered_orders: countBy(orders, (record) => record.order_status === "Delivered_picked"),
+    total_revenue: laundryRevenue,
+    avg_order_value: orders.length ? laundryRevenue / orders.length : 0,
+    total_balance: sumRecords(orders, "balance"),
+    total_amount_paid: sumRecords(orders, "amount_paid"),
+  };
+
+  const paymentStats = {
+    pending_payments: countBy(orders, (record) => record.payment_status === "pending"),
+    partial_payments: countBy(orders, (record) => record.payment_status === "partial"),
+    complete_payments: countBy(orders, (record) => record.payment_status === "completed"),
+    total_pending_amount: orders.reduce((sum, record) => sum + (record.payment_status === "pending" ? toNumber(record.total_price) : 0), 0),
+    total_partial_amount: orders.reduce((sum, record) => sum + (record.payment_status === "partial" ? toNumber(record.amount_paid) : 0), 0),
+    total_complete_amount: orders.reduce((sum, record) => sum + (record.payment_status === "completed" ? toNumber(record.total_price) : 0), 0),
+    total_collected_amount: sumRecords(orders, "amount_paid"),
+    total_balance_amount: sumRecords(orders, "balance"),
+    overdue_payments: countBy(
+      orders,
+      (record) =>
+        ["pending", "partial"].includes(String(record.payment_status || "")) &&
+        (() => {
+          const createdAt = parseDate(record.created_at);
+          return createdAt ? createdAt < new Date() : false;
+        })()
+    ),
+    total_overdue_amount: orders.reduce((sum, record) => {
+      const createdAt = parseDate(record.created_at);
+      const overdue = createdAt ? createdAt < new Date() : false;
+      return sum + (overdue && ["pending", "partial"].includes(String(record.payment_status || "")) ? toNumber(record.balance) : 0);
+    }, 0),
+  };
+
+  const paymentTypeStats: Record<string, { count: number; total_amount: number; amount_collected: number }> = {};
+  for (const record of orders) {
+    const paymentType = String(record.payment_type || "Unknown");
+    const current = paymentTypeStats[paymentType] || { count: 0, total_amount: 0, amount_collected: 0 };
+    current.count += 1;
+    current.total_amount += toNumber(record.total_price);
+    current.amount_collected += toNumber(record.amount_paid);
+    paymentTypeStats[paymentType] = current;
+  }
+
+  const expenseStats = {
+    total_expenses: laundryExpenseTotal,
+    shop_a_expenses: laundryExpenseRecords.filter((record) => record.shop === "Shop A").reduce((sum, record) => sum + toNumber(record.amount), 0),
+    shop_b_expenses: laundryExpenseRecords.filter((record) => record.shop === "Shop B").reduce((sum, record) => sum + toNumber(record.amount), 0),
+    average_expense: laundryExpenseRecords.length ? laundryExpenseTotal / laundryExpenseRecords.length : 0,
+  };
+
+  const hotelStats = {
+    total_orders: hotelOrderIds.size,
+    total_revenue: hotelRevenue,
+    avg_order_value: hotelOrderIds.size ? hotelRevenue / hotelOrderIds.size : 0,
+    total_expenses: hotelExpenseTotal,
+    net_profit: hotelRevenue - hotelExpenseTotal,
+  };
+
+  const shopStatsFor = (shop: "Shop A" | "Shop B") => {
+    const shopOrders = orders.filter((record) => record.shop === shop);
+    const shopExpenses = laundryExpenseRecords.filter((record) => record.shop === shop);
+    return {
+      revenue: shopOrders.reduce((sum, record) => sum + toNumber(record.total_price), 0),
+      total_orders: shopOrders.length,
+      pending_orders: countBy(shopOrders, (record) => record.order_status === "pending"),
+      completed_orders: countBy(shopOrders, (record) => record.order_status === "Completed"),
+      pending_payments: countBy(shopOrders, (record) => record.payment_status === "pending"),
+      partial_payments: countBy(shopOrders, (record) => record.payment_status === "partial"),
+      complete_payments: countBy(shopOrders, (record) => record.payment_status === "completed"),
+      total_pending_amount: shopOrders.reduce((sum, record) => sum + (record.payment_status === "pending" ? toNumber(record.total_price) : 0), 0),
+      total_partial_amount: shopOrders.reduce((sum, record) => sum + (record.payment_status === "partial" ? toNumber(record.amount_paid) : 0), 0),
+      total_complete_amount: shopOrders.reduce((sum, record) => sum + (record.payment_status === "completed" ? toNumber(record.total_price) : 0), 0),
+      total_balance: sumRecords(shopOrders, "balance"),
+      total_amount_paid: sumRecords(shopOrders, "amount_paid"),
+      total_expenses: shopExpenses.reduce((sum, record) => sum + toNumber(record.amount), 0),
+      net_profit:
+        shopOrders.reduce((sum, record) => sum + toNumber(record.total_price), 0) -
+        shopExpenses.reduce((sum, record) => sum + toNumber(record.amount), 0),
+    };
+  };
+
+  const shopAStats = shopStatsFor("Shop A");
+  const shopBStats = shopStatsFor("Shop B");
+
+  const customerStats = new Map<string, { customer__name: string; customer__phone: string; count: number; spent: number }>();
+  for (const order of orders) {
+    const nestedCustomer = order.customer as FirebaseRecord | undefined;
+    const customerId = String(fieldValue(order, ["customer_id"]) || nestedCustomer?.id || "");
+    const customer = customerById.get(customerId) || nestedCustomer;
+    const key = customerId || String(customer?.phone || customer?.name || order.id || "");
+    const current = customerStats.get(key) || {
+      customer__name: String(customer?.name || "Unknown Customer"),
+      customer__phone: String(customer?.phone || ""),
+      count: 0,
+      spent: 0,
+    };
+    current.count += 1;
+    current.spent += toNumber(order.total_price);
+    customerStats.set(key, current);
+  }
+
+  const commonCustomers = Array.from(customerStats.values())
+    .sort((a, b) => (b.spent - a.spent) || (b.count - a.count))
+    .slice(0, 5);
+
+  const paymentMethods = Object.entries(paymentTypeStats)
+    .map(([payment_type, stats]) => ({
+      payment_type,
+      count: stats.count,
+      total: stats.total_amount,
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  const topServiceCounter = new Map<string, number>();
+  for (const item of orderItemRecords) {
+    for (const service of normalizeListField(item.servicetype)) {
+      topServiceCounter.set(service, (topServiceCounter.get(service) || 0) + 1);
+    }
+  }
+  const topServices = Array.from(topServiceCounter.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([servicetype, count]) => ({ servicetype, count }));
+
+  const itemCounter = new Map<string, number>();
+  for (const item of orderItemRecords) {
+    for (const itemName of normalizeListField(item.itemname)) {
+      itemCounter.set(itemName, (itemCounter.get(itemName) || 0) + 1);
+    }
+  }
+  const commonItems = Array.from(itemCounter.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([itemname, count]) => ({ itemname, count }));
+
+  const trendLabels = rangeLabels(range);
+  const laundryTrend = groupRevenueSeries(
+    orders,
+    trendLabels,
+    (record) => {
+      const date = parseDate(record.created_at);
+      return date ? date.toISOString().slice(0, 10) : null;
+    },
+    (record) => toNumber(record.total_price),
+  );
+  const hotelTrend = groupRevenueSeries(
+    hotelOrderItems,
+    trendLabels,
+    (record) => {
+      const date = parseDate(fieldValue(record, ["order_created_at", "created_at"]));
+      return date ? date.toISOString().slice(0, 10) : null;
+    },
+    (record) => hotelItemRevenue(record),
+  );
+  const totalTrend = trendLabels.map((_, index) => laundryTrend[index] + hotelTrend[index]);
 
   return {
     success: true,
     data: {
+      order_stats: orderStats,
+      payment_stats: paymentStats,
+      payment_type_stats: paymentTypeStats,
+      expense_stats: expenseStats,
+      hotel_stats: hotelStats,
       business_growth: {
         total_revenue: totalRevenue,
+        total_orders: orderStats.total_orders + hotelStats.total_orders,
         total_expenses: totalExpenses,
         net_profit: totalRevenue - totalExpenses,
       },
-      order_stats: {
-        total_orders: orders.length,
-        total_revenue: laundryRevenue,
-        net_profit: laundryRevenue - laundryExpenseTotal,
-      },
-      expense_stats: {
-        total_expenses: laundryExpenseTotal,
-      },
-      hotel_stats: {
-        total_orders: new Set(hotelOrderItems.map((record) => record.order_id)).size,
-        total_revenue: hotelRevenue,
-        total_expenses: hotelExpenseTotal,
-        net_profit: hotelRevenue - hotelExpenseTotal,
-      },
-      payment_type_stats: {},
-      payment_methods: [],
-      revenue_by_shop: ["Shop A", "Shop B"].map((shop) => ({
-        shop,
-        total_revenue: orders.filter((record) => record.shop === shop).reduce((sum, record) => sum + toNumber(record.total_price), 0),
-      })),
-      top_services: [],
-      common_items: [],
-      common_customers: [],
+      revenue_by_shop: [
+        { shop: "Shop A", total_revenue: shopAStats.revenue, paid: shopAStats.total_amount_paid, bal: shopAStats.total_balance },
+        { shop: "Shop B", total_revenue: shopBStats.revenue, paid: shopBStats.total_amount_paid, bal: shopBStats.total_balance },
+      ],
+      balance_by_shop: [
+        { shop: "Shop A", total_balance: shopAStats.total_balance },
+        { shop: "Shop B", total_balance: shopBStats.total_balance },
+      ],
+      common_customers: commonCustomers,
+      payment_methods: paymentMethods,
+      top_services: topServices,
+      common_items: commonItems,
+      service_types: topServices,
+      monthly_expenses_data: [],
+      monthly_business_growth: [
+        { label: "Laundry Revenue", data: laundryTrend, borderColor: "#36A2EB", fill: false },
+        { label: "Hotel Revenue", data: hotelTrend, borderColor: "#FF6384", fill: false },
+        { label: "Total Revenue", data: totalTrend, borderColor: "#4BC0C0", borderDash: [5, 5], fill: false },
+      ],
+      trend_labels: trendLabels,
+      shop_a_stats: shopAStats,
+      shop_b_stats: shopBStats,
     },
   };
 }

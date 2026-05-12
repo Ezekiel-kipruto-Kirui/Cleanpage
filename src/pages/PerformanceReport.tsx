@@ -88,6 +88,7 @@ interface DashboardResponse {
       fill?: string | boolean;
       borderDash?: number[];
     }>;
+    trend_labels?: string[];
     shop_a_stats?: {
       revenue: number;
       total_orders: number;
@@ -232,19 +233,27 @@ const CHART_COMMON_OPTIONS = {
 // Payment types in the correct order based on API response
 const PAYMENT_TYPES = ['cash', 'other', 'bank_transfer', 'None'];
 
+const currentMonthRange = () => {
+  const now = new Date();
+  return {
+    start: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0],
+    end: new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0],
+  };
+};
+
 // --- Main Component ---
 
 export default function PerformanceReport() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const monthRange = useMemo(() => currentMonthRange(), []);
 
   // State to hold full dashboard response
   const [dashboardData, setDashboardData] = useState<DashboardResponse | null>(null);
 
   // State for Date Range Filtering
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-  const [today] = useState(new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState(monthRange.start);
+  const [endDate, setEndDate] = useState(monthRange.end);
 
   // Chart Refs
   const revenueComparisonChartRef = useRef<HTMLCanvasElement>(null);
@@ -432,6 +441,7 @@ export default function PerformanceReport() {
       commonCustomers: topCustomersList,
       paymentMethods,
       monthlyBusinessGrowth: data.monthly_business_growth || [],
+      trendLabels: data.trend_labels || [],
 
       // Raw data for debugging
       rawData: data
@@ -522,7 +532,14 @@ export default function PerformanceReport() {
       destroyChart(trendChartRef);
       const ctx = trendChartRef.current.getContext('2d');
       if (ctx) {
-        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const labels = processedData.trendLabels.length > 0
+          ? processedData.trendLabels.map((label) => {
+              const date = new Date(label);
+              return Number.isFinite(date.getTime())
+                ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                : label;
+            })
+          : ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
         // Parse string data to numbers
         const datasets = processedData.monthlyBusinessGrowth.map(dataset => ({
@@ -537,7 +554,7 @@ export default function PerformanceReport() {
         const chart = new Chart(ctx, {
           type: 'line',
           data: {
-            labels: months,
+            labels,
             datasets
           },
           options: {
@@ -708,9 +725,9 @@ export default function PerformanceReport() {
   }, []);
 
   const handleReset = useCallback(() => {
-    setStartDate("");
-    setEndDate("");
-  }, []);
+    setStartDate(monthRange.start);
+    setEndDate(monthRange.end);
+  }, [monthRange.end, monthRange.start]);
 
   // --- Render ---
   if (loading) {
@@ -762,6 +779,7 @@ export default function PerformanceReport() {
   const totalOrders = parseNumber(processedData.shopA?.total_orders || 0) +
     parseNumber(processedData.shopB?.total_orders || 0) +
     processedData.hotelTotalOrders;
+  const isCurrentMonthRange = startDate === monthRange.start && endDate === monthRange.end;
 
   return (
     <div className="min-h-screen p-4 md:p-6 bg-gradient-to-br from-gray-50 to-gray-100">
@@ -772,16 +790,16 @@ export default function PerformanceReport() {
           <div>
             <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Business Performance Dashboard</h1>
             <p className="text-gray-500 text-sm mt-1">
-              {startDate || endDate
-                ? `Date Range: ${startDate || 'Start'} to ${endDate || 'End'}`
-                : 'Real-time business analytics'}
+              {isCurrentMonthRange
+                ? `Current Month Revenue: ${monthRange.start} to ${monthRange.end}`
+                : `Date Range: ${startDate || monthRange.start} to ${endDate || monthRange.end}`}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-3 bg-white rounded-xl px-4 py-3 shadow-sm border border-gray-100">
           <Filter className="h-5 w-5 text-blue-500" />
           <span className="font-semibold text-gray-700">
-            {startDate || endDate ? 'Custom Range' : 'All Time'}
+            {isCurrentMonthRange ? 'Current Month' : 'Custom Range'}
           </span>
         </div>
       </div>
@@ -796,7 +814,7 @@ export default function PerformanceReport() {
               type="date"
               value={startDate}
               onChange={handleStartDateChange}
-              max={today}
+              max={monthRange.end}
               className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -806,7 +824,7 @@ export default function PerformanceReport() {
               type="date"
               value={endDate}
               onChange={handleEndDateChange}
-              max={today}
+              max={monthRange.end}
               className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -1063,7 +1081,9 @@ export default function PerformanceReport() {
         <div className="bg-white rounded-xl p-6 shadow-sm border-gray-100">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-lg font-bold text-gray-900">Revenue Trend</h2>
-            <span className="bg-pink-100 text-pink-800 px-3 py-1 rounded-full text-sm font-semibold">Monthly</span>
+            <span className="bg-pink-100 text-pink-800 px-3 py-1 rounded-full text-sm font-semibold">
+              {processedData.trendLabels.length > 0 ? 'Daily' : 'Monthly'}
+            </span>
           </div>
           <div className="h-64">
             {processedData.monthlyBusinessGrowth?.length > 0 ? (
@@ -1130,9 +1150,9 @@ export default function PerformanceReport() {
       </div>
 
       {/* Payment Methods Table */}
-      {processedData.paymentMethods.length > 0 && (
-        <div className="mt-8 bg-white rounded-xl p-6 shadow-sm border-gray-100">
-          <h2 className="text-lg font-bold text-gray-900 mb-6">Payment Methods Summary</h2>
+      <div className="mt-8 bg-white rounded-xl p-6 shadow-sm border-gray-100">
+        <h2 className="text-lg font-bold text-gray-900 mb-6">Payment Methods Summary</h2>
+        {processedData.paymentMethods.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -1170,8 +1190,12 @@ export default function PerformanceReport() {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="flex items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50 py-10 text-sm text-gray-500">
+            No payment method data for the selected period.
+          </div>
+        )}
+      </div>
 
       {error && (
         <div className="fixed bottom-4 right-4 bg-red-100 text-red-700 p-4 rounded-lg shadow-lg flex justify-between items-center z-50 max-w-md">
