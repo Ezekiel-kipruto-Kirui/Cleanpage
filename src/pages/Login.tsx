@@ -1,6 +1,6 @@
 // pages/Login.tsx
-import { useState, useEffect } from "react";
-import { useNavigate, NavigateFunction } from "react-router-dom";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { authApi } from "@/services/api";
 import {
@@ -28,31 +28,6 @@ const clearSession = () => {
   localStorage.removeItem("selected_shop_type");
 };
 
-/**
- * Checks if user is logged in and redirects appropriately.
- * Returns true if redirection occurred, false otherwise.
- */
-const checkAndRedirect = (navigate: NavigateFunction): boolean => {
-  const userRole = getUserRole();
-  const savedShop = getSelectedShopType();
-
-  if (userRole === 'admin') {
-    navigate(ROUTES.dashboard, { replace: true });
-    return true;
-  }
-
-  if (userRole === 'staff' && savedShop) {
-    if (savedShop === 'laundry') {
-      navigate(ROUTES.laundryDashboard, { replace: true });
-    } else if (savedShop === 'hotel') {
-      navigate(ROUTES.hotelOrders, { replace: true });
-    }
-    return true;
-  }
-
-  return false;
-};
-
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -62,10 +37,6 @@ export default function Login() {
   const [showShopSelection, setShowShopSelection] = useState(false);
   
   const navigate = useNavigate();
-
-  useEffect(() => {
-    checkAndRedirect(navigate);
-  }, [navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -106,13 +77,18 @@ export default function Login() {
     } catch (error: any) {
       console.error("Login error:", error);
 
-      const nextError =
-        error.response?.status === 401 || error.message?.includes("Unauthorized")
-          ? "Session expired or invalid credentials."
-          : error.message || "Login failed. Please try again.";
+      const status = error?.status ?? error?.response?.status;
+      const message = typeof error?.message === "string" ? error.message : "";
+      const unauthorized = status === 401 || message.includes("Unauthorized");
+      const missingRoute = status === 404;
 
-      // If error is 401 or Unauthorized, explicitly clear session
-      if (error.response?.status === 401 || error.message?.includes("Unauthorized")) {
+      const nextError = missingRoute
+        ? "Login service not found. Start the app using the full local app server."
+        : unauthorized
+          ? "Session expired or invalid credentials."
+          : message || "Login failed. Please try again.";
+
+      if (unauthorized) {
         clearSession();
       }
 

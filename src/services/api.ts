@@ -2,6 +2,18 @@ import { API_BASE_URL } from "./url";
 import { ExpenseField, ExpenseRecord, User } from "./types";
 import { handleLoginSuccess } from "@/utils/auth";
 
+class ApiError extends Error {
+  status?: number;
+  body?: string;
+
+  constructor(message: string, status?: number, body?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 /* =====================================================
    TOKEN MANAGEMENT
 ===================================================== */
@@ -193,7 +205,7 @@ const createUrl = (endpoint: string, app: "laundry" | "hotel" | "auth"): string 
 
 const handleError = async (response: Response): Promise<never> => {
   const message = await response.text().catch(() => response.statusText);
-  throw new Error(`API Error: ${response.status} - ${message || "Unknown error"}`);
+  throw new ApiError(`API Error: ${response.status} - ${message || "Unknown error"}`, response.status, message);
 };
 
 /* =====================================================
@@ -264,8 +276,18 @@ const authApi = {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || "Invalid credentials");
+      const errorText = await response.text().catch(() => "");
+      let message = "Login failed. Please try again.";
+
+      if (response.status === 401) {
+        message = "Invalid email or password.";
+      } else if (response.status === 404) {
+        message = "Login service is unavailable. Please make sure the app server is running.";
+      } else if (errorText) {
+        message = errorText;
+      }
+
+      throw new ApiError(message, response.status, errorText);
     }
 
     const tokenData = await response.json();
@@ -308,9 +330,9 @@ const authApi = {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
+      const errorText = await response.text().catch(() => "");
       performAutoLogout();
-      throw new Error(errorText || "Token refresh failed");
+      throw new ApiError(errorText || "Token refresh failed", response.status, errorText);
     }
 
     const data = await response.json();
@@ -343,7 +365,10 @@ const authApi = {
       headers: createHeaders(token),
     });
 
-    if (!response.ok) throw new Error("Failed to fetch user data");
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new ApiError(errorText || "Failed to fetch user data", response.status, errorText);
+    }
 
     const rawUserData = await response.json();
     const userData = rawUserData?.user || rawUserData;

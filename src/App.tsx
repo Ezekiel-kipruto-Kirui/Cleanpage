@@ -191,7 +191,12 @@ const App = () => {
               />
 
               {/* Public Login Route */}
-              <Route path="/login" element={<Login />} />
+              <Route
+                path="/login"
+                element={
+                  isAuthenticated ? <Navigate to={getRootRedirect()} replace /> : <Login />
+                }
+              />
 
               {/* 
                 PROTECTED ROUTES 
