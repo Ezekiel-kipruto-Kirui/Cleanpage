@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { useState, useEffect, useRef } from 'react';
+import { Link } from "react-router-dom";
 import "bootstrap-icons/font/bootstrap-icons.css";
 import { ROUTES } from "@/services/Routes";
 
@@ -250,11 +251,11 @@ export default function LaundryLanding() {
             >
               <i className="bi bi-whatsapp mr-2"></i> WhatsApp
             </a>
-            <a href={ROUTES.login}
+            <Link to={ROUTES.login}
               className="ml-4 hidden md:inline-flex items-center border border-[#0db5f7] text-white bg-[#0db5f7] hover:bg-white hover:text-[#0db5f7] px-5 py-2.5 rounded transition-all font-medium"
             >
               <i className="bi bi-box-arrow-in-right mr-2 text-[18px]"></i>Login
-            </a>
+            </Link>
           </div>
 
           <button
@@ -297,6 +298,8 @@ export default function LaundryLanding() {
               src="./beautiful-composition-spa-bath-concept.jpg"
               alt="Background"
               className="w-full h-full object-cover scale-105"
+              fetchPriority="high"
+              decoding="async"
             />
             <div className="absolute inset-0 bg-gradient-to-r from-slate-900/90 via-slate-900/60 to-transparent z-10"></div>
           </div>
@@ -341,6 +344,8 @@ export default function LaundryLanding() {
                     src="./view-inside-laundromat-room-with-vintage-decor-washing-machines.jpeg"
                     alt="Laundry Interior"
                     className="rounded-2xl shadow-2xl w-full object-cover h-[500px] relative z-10"
+                    loading="lazy"
+                    decoding="async"
                   />
                 </div>
                 <div className="w-full lg:w-1/2">
@@ -397,7 +402,7 @@ export default function LaundryLanding() {
                   <RevealOnScroll key={idx} delay={idx * 150 + 200}>
                     <div className="group bg-white rounded-3xl shadow-lg hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.1)] transition-all duration-500 overflow-hidden flex flex-col h-full border border-slate-100">
                       <div className="h-64 overflow-hidden relative">
-                        <img src={service.img} alt={service.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                        <img src={service.img} alt={service.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" loading="lazy" decoding="async" />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-500"></div>
                       </div>
 
@@ -453,7 +458,7 @@ export default function LaundryLanding() {
                   <RevealOnScroll key={idx} delay={idx * 150 + 200}>
                     <div className="group bg-white rounded-3xl shadow-lg hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.1)] transition-all duration-500 overflow-hidden flex flex-col h-full border border-slate-100">
                       <div className="h-64 overflow-hidden relative">
-                        <img src={service.img} alt={service.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                        <img src={service.img} alt={service.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" loading="lazy" decoding="async" />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-500"></div>
                       </div>
 
@@ -509,7 +514,7 @@ export default function LaundryLanding() {
                   <RevealOnScroll key={idx} delay={idx * 150 + 200}>
                     <div className="group bg-white rounded-3xl shadow-lg hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.1)] transition-all duration-500 overflow-hidden flex flex-col h-full border border-slate-100">
                       <div className="h-64 overflow-hidden relative">
-                        <img src={service.img} alt={service.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                        <img src={service.img} alt={service.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" loading="lazy" decoding="async" />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-500"></div>
                       </div>
 
@@ -565,7 +570,7 @@ export default function LaundryLanding() {
                   <RevealOnScroll key={idx} delay={idx * 150 + 200}>
                     <div className="group bg-white rounded-3xl shadow-lg hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.1)] transition-all duration-500 overflow-hidden flex flex-col h-full border border-slate-100">
                       <div className="h-64 overflow-hidden relative">
-                        <img src={service.img} alt={service.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                        <img src={service.img} alt={service.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" loading="lazy" decoding="async" />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-500"></div>
                       </div>
 
@@ -621,7 +626,7 @@ export default function LaundryLanding() {
                   <RevealOnScroll key={idx} delay={idx * 150 + 200}>
                     <div className="group bg-white rounded-3xl shadow-lg hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.1)] transition-all duration-500 overflow-hidden flex flex-col h-full border border-slate-100">
                       <div className="h-64 overflow-hidden relative">
-                        <img src={service.img} alt={service.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                        <img src={service.img} alt={service.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" loading="lazy" decoding="async" />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-500"></div>
                       </div>
 
@@ -746,6 +751,8 @@ export default function LaundryLanding() {
                       src="shop1.jpeg" 
                       alt="Washing Machines Hallway" 
                       className="parallax-img absolute inset-0 w-full h-full object-cover transition-transform duration-700 ease-out"
+                      loading="lazy"
+                      decoding="async"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-8">
                       <p className="text-white font-medium text-lg">Industrial Capacity Washers</p>
@@ -761,6 +768,8 @@ export default function LaundryLanding() {
                       src="shop2.jpeg" 
                       alt="Professional Folding Area" 
                       className="parallax-img absolute inset-0 w-full h-full object-cover transition-transform duration-700 ease-out"
+                      loading="lazy"
+                      decoding="async"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent flex items-end p-8">
                       <div>
@@ -784,6 +793,8 @@ export default function LaundryLanding() {
                       src="./shop3.jpeg" 
                       alt="Steam Ironing Station" 
                       className="parallax-img absolute inset-0 w-full h-full object-cover transition-transform duration-700 ease-out"
+                      loading="lazy"
+                      decoding="async"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent flex items-end p-8">
                       <div>
@@ -802,6 +813,8 @@ export default function LaundryLanding() {
                       src="./shop4.jpeg" 
                       alt="Organized Clean Clothes" 
                       className="parallax-img absolute inset-0 w-full h-full object-cover transition-transform duration-700 ease-out"
+                      loading="lazy"
+                      decoding="async"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-8">
                       <p className="text-white font-medium text-lg">Ready for Pickup</p>
@@ -836,13 +849,13 @@ export default function LaundryLanding() {
                         <div className="w-full lg:w-3/5 flex flex-col sm:flex-row min-h-[300px] relative">
                           {/* Before Image */}
                           <div className="w-full sm:w-1/2 h-48 sm:h-auto relative group">
-                            <img src={t.beforeImg} alt="Before" className="w-full h-full object-cover" />
+                            <img src={t.beforeImg} alt="Before" className="w-full h-full object-cover" loading="lazy" decoding="async" />
                             <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition-colors"></div>
                             <div className="absolute top-4 left-4 sm:top-6 sm:left-6 bg-red-500 text-white text-xs font-bold px-3 py-1 sm:px-4 sm:py-2 rounded-full shadow-lg tracking-wider">BEFORE</div>
                           </div>
                           {/* After Image */}
                           <div className="w-full sm:w-1/2 h-48 sm:h-auto relative group">
-                            <img src={t.afterImg} alt="After" className="w-full h-full object-cover" />
+                            <img src={t.afterImg} alt="After" className="w-full h-full object-cover" loading="lazy" decoding="async" />
                             <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition-colors"></div>
                             <div className="absolute top-4 left-4 sm:top-6 sm:left-6 bg-green-500 text-white text-xs font-bold px-3 py-1 sm:px-4 sm:py-2 rounded-full shadow-lg tracking-wider">AFTER</div>
                           </div>
@@ -1017,7 +1030,7 @@ export default function LaundryLanding() {
             <div className="space-y-6">
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center p-2 backdrop-blur-sm border border-white/10">
-                  <img src="./Clean-apge-logo-2.png" alt="Clean Page Logo" className="w-full h-full object-contain" />
+                  <img src="./Clean-apge-logo-2.png" alt="Clean Page Logo" className="w-full h-full object-contain" loading="lazy" decoding="async" />
                 </div>
                 <span className="text-2xl font-bold text-white tracking-tight">Clean Page</span>
               </div>

@@ -4,20 +4,15 @@ import { User } from "@/services/types";
 
 export type UserRole = 'admin' | 'staff';
 export type ShopType = 'Shop A' | 'Shop B' | null;
-export const AUTH_STATE_EVENT = 'cleanpage-auth-state-changed';
 
 const isBrowser = () => typeof window !== 'undefined';
-
-const notifyAuthStateChanged = (): void => {
-    if (!isBrowser()) return;
-    window.dispatchEvent(new CustomEvent(AUTH_STATE_EVENT));
-};
+const AUTH_CHANGE_EVENT = 'auth:changed';
 
 /* ------------------------------------------------------------------ */
 /* Storage Utilities                                                   */
 /* ------------------------------------------------------------------ */
 
-const getFromStorage = <T = any>(key: string): T | null => {
+const getFromStorage = <T = unknown>(key: string): T | null => {
     if (!isBrowser()) return null;
 
     const value = localStorage.getItem(key);
@@ -30,7 +25,7 @@ const getFromStorage = <T = any>(key: string): T | null => {
     }
 };
 
-const setToStorage = (key: string, value: any): void => {
+const setToStorage = (key: string, value: unknown): void => {
     if (!isBrowser()) return;
 
     try {
@@ -43,6 +38,26 @@ const setToStorage = (key: string, value: any): void => {
 const removeFromStorage = (key: string): void => {
     if (!isBrowser()) return;
     localStorage.removeItem(key);
+};
+
+export const notifyAuthChanged = (): void => {
+    if (!isBrowser()) return;
+    window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
+};
+
+export const subscribeToAuthChanges = (callback: () => void): (() => void) => {
+    if (!isBrowser()) return () => undefined;
+
+    const handleStorage = () => callback();
+    const handleAuthChanged = () => callback();
+
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChanged);
+
+    return () => {
+        window.removeEventListener('storage', handleStorage);
+        window.removeEventListener(AUTH_CHANGE_EVENT, handleAuthChanged);
+    };
 };
 
 /* ------------------------------------------------------------------ */
@@ -67,16 +82,15 @@ export const setAuthTokens = (accessToken: string, refreshToken: string): void =
     // Backward compatibility
     localStorage.setItem('accessToken', accessToken);
     localStorage.setItem('refreshToken', refreshToken);
-    notifyAuthStateChanged();
+    notifyAuthChanged();
 };
 
 export const clearAuthTokens = (): void => {
     if (!isBrowser()) return;
 
-    ['access_token', 'refresh_token', 'accessToken', 'refreshToken'].forEach(
+    ['access_token', 'refresh_token', 'accessToken', 'refreshToken', 'tokenExpiry'].forEach(
         key => localStorage.removeItem(key)
     );
-    notifyAuthStateChanged();
 };
 
 /* ------------------------------------------------------------------ */
@@ -89,7 +103,7 @@ export const getUserData = (): User | null => {
 
 export const setUserData = (userData: User): void => {
     setToStorage('current_user', userData);
-    notifyAuthStateChanged();
+    notifyAuthChanged();
 };
 
 export const setUserEmail = (email: string): void => {
@@ -121,8 +135,12 @@ export const getSelectedShop = (): ShopType => {
 
 export const setSelectedShop = (shop: ShopType): void => {
     if (!isBrowser()) return;
-    shop ? localStorage.setItem('selected_shop', shop) : localStorage.removeItem('selected_shop');
-    notifyAuthStateChanged();
+    if (shop) {
+        localStorage.setItem('selected_shop', shop);
+    } else {
+        localStorage.removeItem('selected_shop');
+    }
+    notifyAuthChanged();
 };
 
 export const setSelectedShopByType = (shopType: 'laundry' | 'hotel'): void => {
@@ -134,9 +152,36 @@ export const getSelectedShopType = (): 'laundry' | 'hotel' | null => {
     return shop ? REVERSE_SHOP_MAPPING[shop] || null : null;
 };
 
+export const inferShopTypeFromUser = (user = getUserData()): 'laundry' | 'hotel' | null => {
+    if (!user) return null;
+    const userWithShop = user as User & Partial<Record<
+        'shop' | 'shop_type' | 'selected_shop' | 'assigned_shop' | 'assigned_shop_type',
+        unknown
+    >>;
+
+    const rawValues = [
+        userWithShop.shop,
+        userWithShop.shop_type,
+        userWithShop.selected_shop,
+        userWithShop.assigned_shop,
+        userWithShop.assigned_shop_type,
+        ...(Array.isArray(userWithShop.groups) ? userWithShop.groups : []),
+        ...(Array.isArray(userWithShop.user_permissions) ? userWithShop.user_permissions : []),
+    ];
+
+    const haystack = rawValues
+        .filter(Boolean)
+        .map(value => String(value).toLowerCase())
+        .join(' ');
+
+    if (haystack.includes('hotel') || haystack.includes('shop b')) return 'hotel';
+    if (haystack.includes('laundry') || haystack.includes('shop a')) return 'laundry';
+    return null;
+};
+
 export const clearSelectedShop = (): void => {
     removeFromStorage('selected_shop');
-    notifyAuthStateChanged();
+    notifyAuthChanged();
 };
 
 /* ------------------------------------------------------------------ */
@@ -197,9 +242,9 @@ export const isAuthenticated = (): boolean => validateAuthState();
 export const clearAuthData = (): void => {
     if (!isBrowser()) return;
 
-    ['current_user', 'selected_shop'].forEach(removeFromStorage);
-    clearAuthTokens();
-    notifyAuthStateChanged();
+    localStorage.clear();
+    sessionStorage.clear();
+    notifyAuthChanged();
 };
 
 /* ------------------------------------------------------------------ */
@@ -219,6 +264,7 @@ export const getAuthHeaders = (): Record<string, string> => {
 export const handleLoginSuccess = (data: { access: string; refresh: string; user: User }): void => {
     setAuthTokens(data.access, data.refresh);
     setUserData(data.user);
+    notifyAuthChanged();
 };
 
 export const handleLogout = (): void => {

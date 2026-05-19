@@ -31,6 +31,10 @@ export interface PublicUser {
   user_permissions: unknown[];
   last_login: string | null;
   date_joined: string;
+  shop?: unknown;
+  shop_type?: unknown;
+  assigned_shop?: unknown;
+  assigned_shop_type?: unknown;
 }
 
 export interface FirebaseUserRecord extends Partial<PublicUser> {

@@ -8,15 +8,15 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 5173,
-    proxy: {
-      "/api": {
-        target: "http://localhost:3000",
-        changeOrigin: true,
-      },
+    strictPort: true,
+    hmr: {
+      host: "localhost",
+      port: 15173,
+      clientPort: 15173,
     },
-  },
-  css: {
-    postcss: path.resolve(__dirname, "./postcss.config.js"),
+    watch: {
+      ignored: ["**/dist/**", "**/.git/**", "**/node_modules/**"],
+    },
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {

@@ -1,7 +1,7 @@
 import { sendJson, readJson, requireMethod } from "../_lib/http.js";
 import { issueAuthTokens } from "../_lib/jwt.js";
 import { verifyPassword } from "../_lib/password.js";
-import { findAuthUserByEmail, publicUser } from "../_lib/users.js";
+import { findAuthUserByEmail, findUserProfileByEmail, publicUser } from "../_lib/users.js";
 import type { RequestLike, ResponseLike } from "../_lib/types.js";
 
 interface LoginBody {
@@ -22,10 +22,12 @@ export default async function handler(req: RequestLike, res: ResponseLike): Prom
       return;
     }
 
-    const tokens = issueAuthTokens(publicUser(user));
+    const profile = await findUserProfileByEmail(email);
+    const publicRecord = publicUser({ ...user, ...(profile || {}) });
+    const tokens = issueAuthTokens(publicRecord);
     sendJson(res, 200, {
       ...tokens,
-      user: publicUser(user),
+      user: publicRecord,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Login failed";

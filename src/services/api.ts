@@ -1,18 +1,6 @@
 import { API_BASE_URL } from "./url";
 import { ExpenseField, ExpenseRecord, User } from "./types";
-import { handleLoginSuccess } from "@/utils/auth";
-
-class ApiError extends Error {
-  status?: number;
-  body?: string;
-
-  constructor(message: string, status?: number, body?: string) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.body = body;
-  }
-}
+import { clearAuthData, handleLoginSuccess, notifyAuthChanged } from "@/utils/auth";
 
 /* =====================================================
    TOKEN MANAGEMENT
@@ -23,34 +11,42 @@ let refreshToken: string | null = null;
 
 // Token storage utilities
 const tokenStore = {
-  getAccess: (): string | null => accessToken || localStorage.getItem("accessToken"),
-  getRefresh: (): string | null => refreshToken || localStorage.getItem("refreshToken"),
+  getAccess: (): string | null => accessToken || localStorage.getItem("access_token") || localStorage.getItem("accessToken"),
+  getRefresh: (): string | null => refreshToken || localStorage.getItem("refresh_token") || localStorage.getItem("refreshToken"),
   set: (access: string | null, refresh: string | null): void => {
     accessToken = access;
     refreshToken = refresh;
 
     if (access) {
+      localStorage.setItem("access_token", access);
       localStorage.setItem("accessToken", access);
       // Store token expiry timestamp (assuming 1 hour expiry)
       const expiryTime = Date.now() + 60 * 60 * 1000; // 1 hour from now
       localStorage.setItem("tokenExpiry", expiryTime.toString());
     } else {
+      localStorage.removeItem("access_token");
       localStorage.removeItem("accessToken");
       localStorage.removeItem("tokenExpiry");
     }
 
     if (refresh) {
+      localStorage.setItem("refresh_token", refresh);
       localStorage.setItem("refreshToken", refresh);
     } else {
+      localStorage.removeItem("refresh_token");
       localStorage.removeItem("refreshToken");
     }
+    notifyAuthChanged();
   },
   clear: (): void => {
     accessToken = null;
     refreshToken = null;
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
     localStorage.removeItem("accessToken");
     localStorage.removeItem("refreshToken");
     localStorage.removeItem("tokenExpiry");
+    notifyAuthChanged();
   }
 };
 
@@ -64,6 +60,8 @@ export const setAuthTokens = tokenStore.set;
 ===================================================== */
 
 let autoLogoutTimer: NodeJS.Timeout | null = null;
+let autoLogoutInitialized = false;
+const activityEvents = ['mousedown', 'keydown', 'scroll', 'touchstart'] as const;
 
 // Session timeout configuration (15 minutes of inactivity)
 const SESSION_TIMEOUT = 15 * 60 * 1000; // 15 minutes in milliseconds
@@ -78,30 +76,13 @@ const initializeAutoLogout = () => {
     autoLogoutTimer = null;
   }
 
-  // Set up activity listeners
-  const events = ['mousedown', 'keydown', 'scroll', 'touchstart'];
-  
-  const resetAutoLogoutTimer = () => {
-    if (autoLogoutTimer) {
-      clearTimeout(autoLogoutTimer);
-    }
-    
-    autoLogoutTimer = setTimeout(() => {
-      // Check if user is still authenticated
-      const token = tokenStore.getAccess();
-      const user = localStorage.getItem("current_user");
-      
-      if (token && user) {
-        console.log('Auto-logout due to inactivity');
-        performAutoLogout();
-      }
-    }, SESSION_TIMEOUT);
-  };
-
   // Attach event listeners
-  events.forEach(event => {
-    document.addEventListener(event, resetAutoLogoutTimer, { passive: true });
-  });
+  if (!autoLogoutInitialized) {
+    activityEvents.forEach(event => {
+      document.addEventListener(event, resetAutoLogoutTimer, { passive: true });
+    });
+    autoLogoutInitialized = true;
+  }
 
   // Initial setup
   resetAutoLogoutTimer();
@@ -114,22 +95,36 @@ const cleanupAutoLogout = () => {
     autoLogoutTimer = null;
   }
   
-  // Remove event listeners
-  const events = ['mousedown', 'keydown', 'scroll', 'touchstart'];
-  events.forEach(event => {
-    document.removeEventListener(event, () => {});
+  activityEvents.forEach(event => {
+    document.removeEventListener(event, resetAutoLogoutTimer);
   });
+  autoLogoutInitialized = false;
+};
+
+const resetAutoLogoutTimer = () => {
+  if (autoLogoutTimer) {
+    clearTimeout(autoLogoutTimer);
+  }
+
+  autoLogoutTimer = setTimeout(() => {
+    const token = tokenStore.getAccess();
+    const user = localStorage.getItem("current_user");
+
+    if (token && user) {
+      performAutoLogout();
+    }
+  }, SESSION_TIMEOUT);
 };
 
 // Perform auto logout
 const performAutoLogout = () => {
   cleanupAutoLogout();
   tokenStore.clear();
-  localStorage.removeItem("current_user");
+  clearAuthData();
   
   // Only redirect if not already on login page
   if (window.location.pathname !== '/login') {
-    window.location.href = '/login';
+    window.location.replace('/login');
   }
 };
 
@@ -140,7 +135,6 @@ const checkTokenExpiry = (): boolean => {
   
   const isExpired = Date.now() > parseInt(expiry);
   if (isExpired) {
-    console.log('Token has expired');
     return true;
   }
   return false;
@@ -153,29 +147,37 @@ const checkTokenExpiry = (): boolean => {
 const ENDPOINTS = {
   TOKEN: `${API_BASE_URL}/auth/login`,
   REFRESH: `${API_BASE_URL}/auth/refresh`,
-  ME: `${API_BASE_URL}/auth/me`
+  ME: `${API_BASE_URL}/auth/me`,
+  FORGOT_PASSWORD: `${API_BASE_URL}/auth/forgot-password`
 } as const;
 
 const DEFAULT_HEADERS = { "Content-Type": "application/json" };
+const GET_CACHE_TTL = 30_000;
+const getCache = new Map<string, { expiresAt: number; value: unknown }>();
 
 /* =====================================================
    USER UTILITIES
 ===================================================== */
 
-const normalizeUser = (data: any, fallbackEmail = ""): User => ({
-  id: data?.id || data?.pk || 0,
-  email: data?.email || fallbackEmail,
-  user_type: data?.user_type || (data?.is_superuser ? "admin" : "staff"),
-  is_superuser: !!data?.is_superuser,
-  is_staff: !!data?.is_staff,
-  is_active: data?.is_active ?? true,
-  first_name: data?.first_name || "",
-  last_name: data?.last_name || "",
-  groups: data?.groups || [],
-  user_permissions: data?.user_permissions || [],
-  last_login: data?.last_login || null,
-  date_joined: data?.date_joined || new Date().toISOString(),
-});
+const normalizeUser = (data: any, fallbackEmail = ""): User => {
+  const normalizedType = String(data?.user_type || (data?.is_superuser ? "admin" : "staff")).toLowerCase();
+
+  return {
+    ...data,
+    id: data?.id || data?.pk || 0,
+    email: data?.email || fallbackEmail,
+    user_type: normalizedType === "admin" ? "admin" : "staff",
+    is_superuser: !!data?.is_superuser,
+    is_staff: normalizedType === "staff" || !!data?.is_staff,
+    is_active: data?.is_active ?? true,
+    first_name: data?.first_name || "",
+    last_name: data?.last_name || "",
+    groups: Array.isArray(data?.groups) ? data.groups : [],
+    user_permissions: Array.isArray(data?.user_permissions) ? data.user_permissions : [],
+    last_login: data?.last_login || null,
+    date_joined: data?.date_joined || new Date().toISOString(),
+  };
+};
 
 const createDefaultUser = (email: string): User => normalizeUser({ email });
 
@@ -205,7 +207,7 @@ const createUrl = (endpoint: string, app: "laundry" | "hotel" | "auth"): string 
 
 const handleError = async (response: Response): Promise<never> => {
   const message = await response.text().catch(() => response.statusText);
-  throw new ApiError(`API Error: ${response.status} - ${message || "Unknown error"}`, response.status, message);
+  throw new Error(`API Error: ${response.status} - ${message || "Unknown error"}`);
 };
 
 /* =====================================================
@@ -229,6 +231,14 @@ export async function fetchApi<T>(
 
   const url = createUrl(endpoint, app);
   const token = tokenStore.getAccess();
+
+  const method = (options?.method || "GET").toUpperCase();
+  const cacheKey = method === "GET" ? `${app}:${url}:${token || ""}` : "";
+  const cached = cacheKey ? getCache.get(cacheKey) : undefined;
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value as T;
+  }
 
   const makeRequest = async (authToken?: string) => {
     const headers = createHeaders(authToken);
@@ -257,7 +267,13 @@ export async function fetchApi<T>(
       return handleError(response);
     }
 
-    return response.json();
+    const payload = await response.json();
+    if (cacheKey) {
+      getCache.set(cacheKey, { expiresAt: Date.now() + GET_CACHE_TTL, value: payload });
+    } else {
+      getCache.clear();
+    }
+    return payload;
   };
 
   return makeRequest(token);
@@ -276,31 +292,15 @@ const authApi = {
     });
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      let message = "Login failed. Please try again.";
-
-      if (response.status === 401) {
-        message = "Invalid email or password.";
-      } else if (response.status === 404) {
-        message = "Login service is unavailable. Please make sure the app server is running.";
-      } else if (errorText) {
-        message = errorText;
-      }
-
-      throw new ApiError(message, response.status, errorText);
+      const errorText = await response.text();
+      throw new Error(errorText || "Invalid credentials");
     }
 
     const tokenData = await response.json();
-
-    // Get user info
-    const userResponse = await fetch(ENDPOINTS.ME, {
-      headers: { ...DEFAULT_HEADERS, Authorization: `Bearer ${tokenData.access}` },
-    });
-
-    if (!userResponse.ok) throw new Error("Failed to fetch user data");
-
-    const rawUserData = await userResponse.json();
-    const userData = rawUserData?.user || rawUserData;
+    const userData = tokenData?.user;
+    if (!tokenData?.access || !tokenData?.refresh || !userData) {
+      throw new Error("Invalid login response from server");
+    }
     const user = normalizeUser(userData, credentials.email);
 
     // Store tokens and user
@@ -314,6 +314,21 @@ const authApi = {
     }
 
     return { access: tokenData.access, refresh: tokenData.refresh, user };
+  },
+
+  forgotPassword: async (email: string) => {
+    const response = await fetch(ENDPOINTS.FORGOT_PASSWORD, {
+      method: "POST",
+      headers: DEFAULT_HEADERS,
+      body: JSON.stringify({ email }),
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload?.detail || "Failed to submit password reset request");
+    }
+
+    return payload as { detail: string };
   },
 
   refreshToken: async () => {
@@ -330,9 +345,9 @@ const authApi = {
     });
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
+      const errorText = await response.text();
       performAutoLogout();
-      throw new ApiError(errorText || "Token refresh failed", response.status, errorText);
+      throw new Error(errorText || "Token refresh failed");
     }
 
     const data = await response.json();
@@ -343,8 +358,7 @@ const authApi = {
   logout: () => {
     cleanupAutoLogout();
     tokenStore.clear();
-    localStorage.removeItem("current_user");
-    localStorage.removeItem("selected_shop");
+    clearAuthData();
   },
 
   me: async () => {
@@ -365,10 +379,7 @@ const authApi = {
       headers: createHeaders(token),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      throw new ApiError(errorText || "Failed to fetch user data", response.status, errorText);
-    }
+    if (!response.ok) throw new Error("Failed to fetch user data");
 
     const rawUserData = await response.json();
     const userData = rawUserData?.user || rawUserData;
@@ -456,8 +467,7 @@ export const setSelectedShop = (shop: "laundry" | "hotel") =>
 export const clearUserData = () => {
   cleanupAutoLogout();
   tokenStore.clear();
-  localStorage.removeItem("current_user");
-  localStorage.removeItem("selected_shop");
+  clearAuthData();
 };
 
 // Initialize auto-logout if user is already logged in when module loads

@@ -5,7 +5,13 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { MainLayout } from "@/components/layout/MainLayout";
-import { AUTH_STATE_EVENT, getAccessToken, getUserRole, getSelectedShop, validateAuthState } from "@/utils/auth";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import {
+  getUserRole,
+  getSelectedShopType,
+  isAuthenticated,
+  subscribeToAuthChanges,
+} from "@/utils/auth";
 import { ROUTES } from "./services/Routes";
 
 // Lazy load all pages. These will now be split into separate files during build.
@@ -38,22 +44,6 @@ const PageLoader = () => (
   </div>
 );
 
-// Types
-type ShopType = 'Shop A' | 'Shop B' | null;
-type AppShopType = 'laundry' | 'hotel' | null;
-
-// Helper to convert ShopType to AppShopType
-const getShopIdFromType = (shopType: ShopType): AppShopType => {
-  if (!shopType) return null;
-
-  const shopMapping: Record<string, 'laundry' | 'hotel'> = {
-    'Shop A': 'laundry',
-    'Shop B': 'hotel',
-  };
-
-  return shopMapping[shopType] || null;
-};
-
 // Protected Route wrapper with role-based access control
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -66,16 +56,15 @@ const ProtectedRoute = ({
   adminOnly = false,
   shopType
 }: ProtectedRouteProps) => {
-  const token = getAccessToken();
+  const authenticated = isAuthenticated();
   const userRole = getUserRole();
-  const selectedShop = getSelectedShop();
-  const appSelectedShop = getShopIdFromType(selectedShop);
+  const selectedShopType = getSelectedShopType();
 
-  if (!token) {
+  if (!authenticated) {
     return <Navigate to="/login" replace />;
   }
 
-  if (userRole === "staff" && !selectedShop) {
+  if (userRole === "staff" && !selectedShopType) {
     return <Navigate to="/login" replace state={{ needsShopSelection: true }} />;
   }
 
@@ -83,10 +72,10 @@ const ProtectedRoute = ({
     return <Navigate to="/unauthorized" replace />;
   }
 
-  if (userRole === "staff" && shopType && appSelectedShop !== shopType) {
-    if (appSelectedShop === "laundry") {
+  if (userRole === "staff" && shopType && selectedShopType !== shopType) {
+    if (selectedShopType === "laundry") {
       return <Navigate to={ROUTES.laundryDashboard} replace />;
-    } else if (appSelectedShop === "hotel") {
+    } else if (selectedShopType === "hotel") {
       return <Navigate to={ROUTES.fooditems} replace />;
     }
   }
@@ -95,48 +84,20 @@ const ProtectedRoute = ({
 };
 
 const App = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [userRole, setUserRole] = useState<"admin" | "staff" | null>(null);
-  const [selectedShop, setSelectedShop] = useState<ShopType>(null);
 
   useEffect(() => {
-    setIsAuthLoading(true);
-
-    const resolveAuthState = () => {
-      const hasValidSession = validateAuthState();
-      const token = getAccessToken();
-      const role = getUserRole();
-      const shop = getSelectedShop();
-
-      setIsAuthenticated(hasValidSession && !!token);
-      setUserRole(hasValidSession ? role : null);
-      setSelectedShop(hasValidSession ? shop : null);
-      setIsAuthLoading(false);
+    const syncAuthState = () => {
+      setAuthenticated(isAuthenticated());
+      setUserRole(getUserRole());
     };
 
-    resolveAuthState();
-
-    const handleStorage = (event: StorageEvent) => {
-      if (!event.key || ["access_token", "accessToken", "refresh_token", "refreshToken", "current_user", "selected_shop"].includes(event.key)) {
-        resolveAuthState();
-      }
-    };
-
-    const handleAuthStateChanged = () => {
-      resolveAuthState();
-    };
-
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(AUTH_STATE_EVENT, handleAuthStateChanged);
-
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(AUTH_STATE_EVENT, handleAuthStateChanged);
-    };
+    syncAuthState();
+    return subscribeToAuthChanges(syncAuthState);
   }, []);
 
-  if (isAuthLoading) {
+  if (authenticated === null) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
@@ -145,7 +106,7 @@ const App = () => {
   }
 
   const getRootRedirect = () => {
-    if (!isAuthenticated) {
+    if (!authenticated) {
       return "/home";
     }
 
@@ -154,22 +115,23 @@ const App = () => {
     }
 
     if (userRole === "staff") {
-      const appSelectedShop = getShopIdFromType(selectedShop);
-      if (appSelectedShop === "laundry") return ROUTES.laundryDashboard;
-      if (appSelectedShop === "hotel") return ROUTES.fooditems;
+      const selectedShopType = getSelectedShopType();
+      if (selectedShopType === "laundry") return ROUTES.laundryDashboard;
+      if (selectedShopType === "hotel") return ROUTES.fooditems;
     }
 
     return "/home";
   };
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-          <Suspense fallback={<PageLoader />}>
-            <Routes>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+            <Suspense fallback={<PageLoader />}>
+              <Routes>
               {/* 
                 PUBLIC LANDING PAGE 
               */}
@@ -191,19 +153,12 @@ const App = () => {
               />
 
               {/* Public Login Route */}
-              <Route
-                path="/login"
-                element={
-                  isAuthenticated ? <Navigate to={getRootRedirect()} replace /> : <Login />
-                }
-              />
+              <Route path="/login" element={<Login />} />
 
               {/* 
                 PROTECTED ROUTES 
               */}
-              {isAuthenticated ? (
-                <>
-                  {/* Admin Routes */}
+              {/* Admin Routes */}
                   <Route
                     path={ROUTES.dashboard}
                     element={
@@ -331,16 +286,13 @@ const App = () => {
                     }
                   />
 
-                  <Route path="*" element={<NotFound />} />
-                </>
-              ) : (
-                <Route path="*" element={<Navigate to="/login" replace />} />
-              )}
-            </Routes>
-          </Suspense>
-        </BrowserRouter>
-      </TooltipProvider>
-    </QueryClientProvider>
+              <Route path="*" element={<NotFound />} />
+              </Routes>
+            </Suspense>
+          </BrowserRouter>
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 };
 

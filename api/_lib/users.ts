@@ -6,10 +6,18 @@ import type { FirebaseUserRecord, PublicUser } from "./types.js";
 let localExportCache: Record<string, unknown> | null | undefined;
 
 export function publicUser(user: FirebaseUserRecord): PublicUser {
+  const normalizedType = String(user.user_type || (user.is_superuser ? "admin" : "staff")).toLowerCase();
+  const shopFields = {
+    ...(user.shop ? { shop: user.shop } : {}),
+    ...(user.shop_type ? { shop_type: user.shop_type } : {}),
+    ...(user.assigned_shop ? { assigned_shop: user.assigned_shop } : {}),
+    ...(user.assigned_shop_type ? { assigned_shop_type: user.assigned_shop_type } : {}),
+  };
+
   return {
     id: user.id,
     email: user.email,
-    user_type: user.user_type || (user.is_superuser ? "admin" : "staff"),
+    user_type: normalizedType,
     is_superuser: !!user.is_superuser,
     is_staff: !!user.is_staff,
     is_active: user.is_active ?? true,
@@ -19,6 +27,7 @@ export function publicUser(user: FirebaseUserRecord): PublicUser {
     user_permissions: Array.isArray(user.user_permissions) ? user.user_permissions : [],
     last_login: user.last_login || null,
     date_joined: user.date_joined || new Date().toISOString(),
+    ...shopFields,
   };
 }
 
@@ -62,6 +71,7 @@ async function getAuthUsersForLogin(): Promise<unknown> {
   } catch (error) {
     const localExport = await readLocalExport();
     if (localExport?.auth_users) return localExport.auth_users;
+    if (localExport?.LaundryApp_userprofile) return localExport.LaundryApp_userprofile;
 
     const message = error instanceof Error ? error.message : "Unknown auth_users access error";
     throw new Error(
@@ -71,10 +81,15 @@ async function getAuthUsersForLogin(): Promise<unknown> {
 
   const localExport = await readLocalExport();
   if (localExport?.auth_users) return localExport.auth_users;
+  if (localExport?.LaundryApp_userprofile) return localExport.LaundryApp_userprofile;
 
   throw new Error(
     "Server auth data is empty. Upload auth_users to Firebase or provide FIREBASE_DATABASE_AUTH_TOKEN for protected access."
   );
+}
+
+async function getProfileUsersForLogin(): Promise<unknown> {
+  return firebaseOrLocal("LaundryApp_userprofile");
 }
 
 export async function findAuthUserByEmail(email: string): Promise<FirebaseUserRecord | null> {
@@ -85,9 +100,39 @@ export async function findAuthUserByEmail(email: string): Promise<FirebaseUserRe
   const authUser = normalizeRecords(authUsers).find(
     (user) => String(user?.email || "").trim().toLowerCase() === normalizedEmail
   );
-  if (authUser) return authUser;
 
-  return null;
+  const profileUsers = await getProfileUsersForLogin().catch(() => null);
+  const profileUser = normalizeRecords(profileUsers).find(
+    (user) => String(user?.email || "").trim().toLowerCase() === normalizedEmail
+  );
+
+  if (profileUser?.password || profileUser?.password_hash) {
+    return {
+      ...authUser,
+      ...profileUser,
+      password: profileUser.password,
+      password_hash: profileUser.password_hash || undefined,
+    };
+  }
+
+  if (authUser) {
+    return {
+      ...profileUser,
+      ...authUser,
+    };
+  }
+
+  return profileUser || null;
+}
+
+export async function findUserProfileByEmail(email: string): Promise<FirebaseUserRecord | null> {
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  if (!normalizedEmail) return null;
+
+  const profileUsers = await getProfileUsersForLogin().catch(() => null);
+  return normalizeRecords(profileUsers).find(
+    (user) => String(user?.email || "").trim().toLowerCase() === normalizedEmail
+  ) || null;
 }
 
 export async function findUserById(id: string): Promise<FirebaseUserRecord | null> {

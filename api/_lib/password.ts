@@ -28,3 +28,13 @@ export function verifyPassword(password?: string, storedPassword?: string): bool
 
   return timingSafeEqualText(password, storedPassword);
 }
+
+export function hashDjangoPbkdf2(password: string): string {
+  const iterations = 1_000_000;
+  const salt = crypto.randomBytes(12).toString("base64url");
+  const hash = crypto
+    .pbkdf2Sync(password, salt, iterations, 32, "sha256")
+    .toString("base64");
+
+  return `pbkdf2_sha256$${iterations}$${salt}$${hash}`;
+}

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Sidebar } from "./Sidebar";
 import { Menu, X, User, ChevronDown, LogOut } from "lucide-react";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,8 +19,7 @@ import { useNavigate } from "react-router-dom";
 import {
   getUserData,
   getSelectedShop,
-  isAdmin,
-  isStaff
+  clearAuthData
 } from "@/utils/auth";
 import{ ROUTES } from "@/services/Routes"
 
@@ -164,12 +163,11 @@ export function MainLayout({ children, title = "Dashboard" }: MainLayoutProps) {
     try {
       await authApi.logout();
       toast.success("Logged out successfully!");
-      navigate("/login");
     } catch (error) {
       console.error("Logout error:", error);
-      // Even if logout fails, clear local tokens and redirect
-      localStorage.clear();
-      navigate("/login");
+      clearAuthData();
+    } finally {
+      navigate("/login", { replace: true });
     }
   };
 
@@ -230,10 +228,6 @@ export function MainLayout({ children, title = "Dashboard" }: MainLayoutProps) {
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="flex items-center gap-2 hover:bg-gray-100">
                     <Avatar className="h-8 w-8">
-                      <AvatarImage
-                        src={`https://ui-avatars.com/api/?name=${getUserInitials(currentUser)}&background=3b82f6&color=ffffff`}
-                        alt={getUserFirstName(currentUser)}
-                      />
                       <AvatarFallback className="bg-blue-600 text-white">
                         {getUserInitials(currentUser)}
                       </AvatarFallback>
@@ -256,10 +250,6 @@ export function MainLayout({ children, title = "Dashboard" }: MainLayoutProps) {
                   <div className="px-4 py-3 border-b">
                     <div className="flex items-center gap-3">
                       <Avatar className="h-10 w-10">
-                        <AvatarImage
-                          src={`https://ui-avatars.com/api/?name=${getUserInitials(currentUser)}&background=3b82f6&color=ffffff`}
-                          alt={getUserFirstName(currentUser)}
-                        />
                         <AvatarFallback className="bg-blue-600 text-white">
                           {getUserInitials(currentUser)}
                         </AvatarFallback>

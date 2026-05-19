@@ -1,6 +1,6 @@
 // pages/Login.tsx
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, NavigateFunction } from "react-router-dom";
 import { toast } from "sonner";
 import { authApi } from "@/services/api";
 import {
@@ -12,20 +12,50 @@ import {
 } from "@/components/ui/dialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ROUTES } from "@/services/Routes";
-import { getUserRole, getSelectedShopType, setSelectedShopByType, isAdmin, isStaff } from "@/utils/auth";
+import {
+  clearAuthData,
+  getSelectedShopType,
+  getUserRole,
+  inferShopTypeFromUser,
+  isAuthenticated,
+  setSelectedShopByType,
+} from "@/utils/auth";
 
 /**
  * Clears all authentication data from local storage.
  * Used to handle session expiry or logout.
  */
 const clearSession = () => {
-  localStorage.removeItem("access_token");
-  localStorage.removeItem("accessToken");
-  localStorage.removeItem("refresh_token");
-  localStorage.removeItem("refreshToken");
-  localStorage.removeItem("current_user");
-  localStorage.removeItem("selected_shop");
-  localStorage.removeItem("selected_shop_type");
+  clearAuthData();
+};
+
+/**
+ * Checks if user is logged in and redirects appropriately.
+ * Returns true if redirection occurred, false otherwise.
+ */
+const checkAndRedirect = (navigate: NavigateFunction): boolean => {
+  if (!isAuthenticated()) {
+    return false;
+  }
+
+  const userRole = getUserRole();
+  const savedShop = getSelectedShopType();
+
+  if (userRole === 'admin') {
+    navigate(ROUTES.dashboard, { replace: true });
+    return true;
+  }
+
+  if (userRole === 'staff' && savedShop) {
+    if (savedShop === 'laundry') {
+      navigate(ROUTES.laundryDashboard, { replace: true });
+    } else if (savedShop === 'hotel') {
+      navigate(ROUTES.hotelOrders, { replace: true });
+    }
+    return true;
+  }
+
+  return false;
 };
 
 export default function Login() {
@@ -33,10 +63,18 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isResetLoading, setIsResetLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [showShopSelection, setShowShopSelection] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
   
   const navigate = useNavigate();
+
+  useEffect(() => {
+    checkAndRedirect(navigate);
+  }, [navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,15 +94,17 @@ export default function Login() {
         throw new Error("Invalid response from server");
       }
 
-      // Determine logic based on role
-      if (isAdmin()) {
+      const role = response.user.user_type === "admin" || response.user.is_superuser ? "admin" : "staff";
+      const inferredShop = inferShopTypeFromUser(response.user);
+
+      if (role === "admin") {
         toast.success("Login successful! Welcome Admin.");
         navigate(ROUTES.dashboard, { replace: true });
-      } else if (isStaff()) {
-        const savedShop = getSelectedShopType();
+      } else if (role === "staff") {
+        const savedShop = getSelectedShopType() || inferredShop;
 
         if (savedShop) {
-          handleShopSelection(savedShop); // Redirect to saved shop
+          handleShopSelection(savedShop);
         } else {
           toast.success("Login successful! Please select your shop.");
           setShowShopSelection(true);
@@ -76,24 +116,18 @@ export default function Login() {
       }
     } catch (error: any) {
       console.error("Login error:", error);
-
-      const status = error?.status ?? error?.response?.status;
-      const message = typeof error?.message === "string" ? error.message : "";
-      const unauthorized = status === 401 || message.includes("Unauthorized");
-      const missingRoute = status === 404;
-
-      const nextError = missingRoute
-        ? "Login service not found. Start the app using the full local app server."
-        : unauthorized
-          ? "Session expired or invalid credentials."
-          : message || "Login failed. Please try again.";
-
-      if (unauthorized) {
+      
+      // If error is 401 or Unauthorized, explicitly clear session
+      if (error.response?.status === 401 || error.message?.includes("Unauthorized")) {
         clearSession();
+        const message = "Invalid email or password.";
+        setLoginError(message);
+        toast.error(message);
+      } else {
+        const message = error.message || "Login failed. Please try again.";
+        setLoginError(message);
+        toast.error(message);
       }
-
-      setLoginError(nextError);
-      toast.error(nextError);
     } finally {
       setIsLoading(false);
     }
@@ -109,6 +143,29 @@ export default function Login() {
     } else {
       navigate(ROUTES.fooditems, { replace: true });
       toast.success("Welcome to Hotel Dashboard!");
+    }
+  };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!resetEmail.trim()) {
+      setResetMessage("Please enter your email address.");
+      return;
+    }
+
+    setIsResetLoading(true);
+    setResetMessage(null);
+
+    try {
+      const response = await authApi.forgotPassword(resetEmail.trim());
+      setResetMessage(response.detail);
+      toast.success("Password reset request submitted.");
+    } catch (error: any) {
+      setResetMessage(error.message || "Failed to submit password reset request.");
+      toast.error("Could not submit password reset request.");
+    } finally {
+      setIsResetLoading(false);
     }
   };
 
@@ -218,6 +275,19 @@ export default function Login() {
                       )}
                     </button>
                   </div>
+                  <div className="mt-2 text-right">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setResetEmail(email);
+                        setResetMessage(null);
+                        setShowForgotPassword(true);
+                      }}
+                      className="text-sm font-medium text-blue-600 hover:text-blue-700"
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
                 </div>
 
                 <button
@@ -242,6 +312,59 @@ export default function Login() {
           </div>
         </div>
       </div>
+
+      <Dialog open={showForgotPassword} onOpenChange={setShowForgotPassword}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Forgot password</DialogTitle>
+            <DialogDescription>
+              Submit your account email and we will record a password reset request from the Firebase-backed auth system for admin follow-up.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleForgotPassword} className="space-y-4">
+            <div>
+              <label htmlFor="reset-email" className="block text-sm font-medium text-gray-700 mb-2">
+                Email address
+              </label>
+              <input
+                id="reset-email"
+                type="email"
+                value={resetEmail}
+                onChange={(e) => setResetEmail(e.target.value)}
+                className="block w-full px-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                placeholder="you@example.com"
+                disabled={isResetLoading}
+                required
+              />
+            </div>
+
+            {resetMessage && (
+              <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                {resetMessage}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowForgotPassword(false)}
+                className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200"
+                disabled={isResetLoading}
+              >
+                Close
+              </button>
+              <button
+                type="submit"
+                disabled={isResetLoading}
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {isResetLoading ? "Submitting..." : "Request reset"}
+              </button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* Shop Selection Dialog */}
       <Dialog open={showShopSelection} onOpenChange={setShowShopSelection}>
